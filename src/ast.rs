@@ -1,11 +1,11 @@
+use ark_ff::Field;
 use std::collections::HashMap;
-use std::marker::PhantomData;
 
 /// Metadata for each node: an ID and a definite evaluated value (no Option).
 #[derive(Debug, Clone)]
-pub struct NodeMeta {
-    pub id: usize,
-    pub evaluated_value: EvalValue,
+pub struct NodeMeta<V> {
+    pub node_id: usize,
+    pub evaluated_value: V,
 }
 
 /// An example of a small "value" enum (so you can handle integers, booleans, etc.)
@@ -53,11 +53,11 @@ pub enum AST<M> {
 }
 
 /// Simple struct for environment (assign IDs, hold cache if you like).
-/// We'll keep a cache that maps the pointer of the “old” AST<()> node
+/// We'll keep a cache that maps the pointer of the "old" AST<()> node
 /// to the newly transformed AST<NodeMeta>.
 struct Env {
     next_id: usize,
-    cache: HashMap<*const AST<()>, AST<NodeMeta>>,
+    cache: HashMap<*const AST<()>, AST<NodeMeta<EvalValue>>>
 }
 
 impl Env {
@@ -77,27 +77,27 @@ impl Env {
 }
 
 /// Helper so AST<NodeMeta> can return its metadata easily.
-impl AST<NodeMeta> {
-    pub fn meta(&self) -> &NodeMeta {
+impl<M> AST<M> {
+    pub fn meta(&self) -> &M {
         match self {
-            AST::Int(_, meta)
-            | AST::Bool(_, meta)
-            | AST::Add(_, _, meta)
-            | AST::Sub(_, _, meta)
-            | AST::Mult(_, _, meta)
-            | AST::Div(_, _, meta)
-            | AST::Eq(_, _, meta)
-            | AST::Not(_, meta)
-            | AST::If(_, _, _, meta) => meta,
+            AST::Int(_, m)
+            | AST::Bool(_, m)
+            | AST::Add(_, _, m)
+            | AST::Sub(_, _, m)
+            | AST::Mult(_, _, m)
+            | AST::Div(_, _, m)
+            | AST::Eq(_, _, m)
+            | AST::Not(_, m)
+            | AST::If(_, _, _, m) => m,
         }
     }
 }
 
-/// Our main transformation: AST<()> -> Result<AST<NodeMeta>, EvalError>
+/// Our main transformation: AST<()> -> Result<AST<NodeMeta<EvalValue>>, EvalError>
 /// Now uses a cache to avoid recomputing the same AST node multiple times.
 /// (Most pure AST trees won't share the exact same pointer for subtrees,
 /// but if you do have shared subtrees, the cache will skip repeated work.)
-fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>, EvalError> {
+fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta<EvalValue>>, EvalError> {
     // If we've already computed this node, return the cached result.
     let expr_ptr = expr as *const AST<()>;
     if let Some(already_computed) = env.cache.get(&expr_ptr) {
@@ -113,7 +113,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
             AST::Int(
                 *value,
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value: EvalValue::IntVal(*value),
                 },
             )
@@ -123,7 +123,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
             AST::Bool(
                 *b,
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value: EvalValue::BoolVal(*b),
                 },
             )
@@ -133,8 +133,8 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
         // Arithmetic
         // -----------------
         AST::Add(lhs, rhs, ()) => {
-            let lhs_w_meta = add_metadata_and_eval(lhs, env)?;
-            let rhs_w_meta = add_metadata_and_eval(rhs, env)?;
+            let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
+            let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
             // Both sides must be IntVal
@@ -155,15 +155,15 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
         }
 
         AST::Sub(lhs, rhs, ()) => {
-            let lhs_w_meta = add_metadata_and_eval(lhs, env)?;
-            let rhs_w_meta = add_metadata_and_eval(rhs, env)?;
+            let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
+            let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
             let (lval, rval) = match (
@@ -183,15 +183,15 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
         }
 
         AST::Mult(lhs, rhs, ()) => {
-            let lhs_w_meta = add_metadata_and_eval(lhs, env)?;
-            let rhs_w_meta = add_metadata_and_eval(rhs, env)?;
+            let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
+            let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
             let (lval, rval) = match (
@@ -211,15 +211,15 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
         }
 
         AST::Div(lhs, rhs, ()) => {
-            let lhs_w_meta = add_metadata_and_eval(lhs, env)?;
-            let rhs_w_meta = add_metadata_and_eval(rhs, env)?;
+            let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
+            let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
             let (lval, rval) = match (
@@ -243,7 +243,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
@@ -253,8 +253,8 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
         // Comparisons
         // -----------------
         AST::Eq(lhs, rhs, ()) => {
-            let lhs_w_meta = add_metadata_and_eval(lhs, env)?;
-            let rhs_w_meta = add_metadata_and_eval(rhs, env)?;
+            let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
+            let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
             let evaluated_value = match (
@@ -274,7 +274,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
@@ -284,7 +284,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
         // Boolean NOT
         // -----------------
         AST::Not(sub, ()) => {
-            let sub_w_meta = add_metadata_and_eval(sub, env)?;
+            let sub_w_meta = add_metadata_and_eval_internal(sub, env)?;
             let id = env.fresh_id();
 
             let sb = match &sub_w_meta.meta().evaluated_value {
@@ -300,7 +300,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
             AST::Not(
                 Box::new(sub_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
@@ -310,9 +310,9 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
         // If-then-else
         // -----------------
         AST::If(cond, then_branch, else_branch, ()) => {
-            let cond_w_meta = add_metadata_and_eval(cond, env)?;
-            let then_w_meta = add_metadata_and_eval(then_branch, env)?;
-            let else_w_meta = add_metadata_and_eval(else_branch, env)?;
+            let cond_w_meta = add_metadata_and_eval_internal(cond, env)?;
+            let then_w_meta = add_metadata_and_eval_internal(then_branch, env)?;
+            let else_w_meta = add_metadata_and_eval_internal(else_branch, env)?;
             let id = env.fresh_id();
 
             // If the condition is a BoolVal, pick one branch for "overall" value
@@ -332,7 +332,7 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
                 Box::new(then_w_meta),
                 Box::new(else_w_meta),
                 NodeMeta {
-                    id,
+                    node_id: id,
                     evaluated_value,
                 },
             )
@@ -344,10 +344,115 @@ fn add_metadata_and_eval(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta>,
     Ok(result_ast)
 }
 
-/// A top-level function that creates an Env and calls add_metadata_and_eval.
-fn eval_ast(expr: &AST<()>) -> Result<AST<NodeMeta>, EvalError> {
+/// A top-level function that creates an Env and calls add_metadata_and_eval_internal.
+fn eval_ast(expr: &AST<()>) -> Result<AST<NodeMeta<EvalValue>>, EvalError> {
     let mut env = Env::new();
-    add_metadata_and_eval(expr, &mut env)
+    add_metadata_and_eval_internal(expr, &mut env)
+}
+
+/// Convert a single EvalValue (i64 or bool) into a Field element.
+fn map_eval_value_to_field<F: Field>(val: &EvalValue) -> F {
+    match val {
+        EvalValue::IntVal(i) => F::from(*i as u64), // Convert i64 to u64 since Field implements From<u64>
+        EvalValue::BoolVal(b) => {
+            if *b {
+                F::one()
+            } else {
+                F::zero()
+            }
+        }
+    }
+}
+
+/// Recursively convert each node's metadata from EvalValue → F.
+fn map_ast_value_to_field<F: Field>(ast: &AST<NodeMeta<EvalValue>>) -> AST<NodeMeta<F>> {
+    match ast {
+        AST::Int(x, meta) => AST::Int(
+            *x,
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Bool(b, meta) => AST::Bool(
+            *b,
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Add(lhs, rhs, meta) => AST::Add(
+            Box::new(map_ast_value_to_field(lhs)),
+            Box::new(map_ast_value_to_field(rhs)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Sub(lhs, rhs, meta) => AST::Sub(
+            Box::new(map_ast_value_to_field(lhs)),
+            Box::new(map_ast_value_to_field(rhs)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Mult(lhs, rhs, meta) => AST::Mult(
+            Box::new(map_ast_value_to_field(lhs)),
+            Box::new(map_ast_value_to_field(rhs)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Div(lhs, rhs, meta) => AST::Div(
+            Box::new(map_ast_value_to_field(lhs)),
+            Box::new(map_ast_value_to_field(rhs)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Eq(lhs, rhs, meta) => AST::Eq(
+            Box::new(map_ast_value_to_field(lhs)),
+            Box::new(map_ast_value_to_field(rhs)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::Not(sub, meta) => AST::Not(
+            Box::new(map_ast_value_to_field(sub)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        AST::If(cond, then_branch, else_branch, meta) => AST::If(
+            Box::new(map_ast_value_to_field(cond)),
+            Box::new(map_ast_value_to_field(then_branch)),
+            Box::new(map_ast_value_to_field(else_branch)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+    }
+}
+
+/// The public function that:
+/// 1) Evaluates the AST (with no metadata) into AST<NodeMeta<EvalValue>>  
+/// 2) Maps that to AST<NodeMeta<F>>  
+pub fn add_metadata_and_eval<F: Field>(
+    expr: &AST<()>,
+) -> Result<AST<NodeMeta<F>>, EvalError> {
+    // Step 1: Evaluate to AST<NodeMeta<EvalValue>>
+    let mut env = Env::new();
+    let eval_value_ast = add_metadata_and_eval_internal(expr, &mut env)?;
+
+    // Step 2: Convert EvalValue → F
+    let field_ast = map_ast_value_to_field(&eval_value_ast);
+    Ok(field_ast)
 }
 
 fn main() {
@@ -358,7 +463,7 @@ fn main() {
         (),
     );
 
-    // Evaluate and return an AST<NodeMeta> or an evaluation error
+    // Evaluate and return an AST<NodeMeta<EvalValue>> or an evaluation error
     match eval_ast(&naked_ast) {
         Ok(evaluated_ast) => {
             println!("Success! Evaluated AST = {:?}", evaluated_ast);
