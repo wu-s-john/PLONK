@@ -2,6 +2,10 @@ use ark_ff::Field; // Example import
 use ark_std::{test_rng, UniformRand};
 use ark_tweedle::Fr;
 mod ast;
+mod execution_trace;
+mod offset_table;
+mod permutation_polynomial;
+mod polynomial_utils;
 
 fn main() {
     let mut rng = test_rng();

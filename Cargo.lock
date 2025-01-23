@@ -376,6 +376,7 @@ dependencies = [
  "ark-ec",
  "ark-ff",
  "ark-groth16",
+ "ark-poly",
  "ark-relations",
  "ark-std",
 ]

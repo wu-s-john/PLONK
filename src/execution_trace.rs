@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use ark_ff::{Field, One, Zero};
 
 use crate::ast::NodeMeta;
+use crate::offset_table::OffsetTable;
 
 pub struct RowExecution<F, const N: usize> {
     pub inputs: [F; N],  // fixed-size array of inputs
@@ -98,9 +99,7 @@ pub enum WireType {
     Output,
 }
 
-pub type PermutationTrace = AllOpTraces<WirePosition>;
-
-impl<F: Field> ExecutionTrace<F> {
+impl<F> ExecutionTrace<F> {
     /// Collect all wire positions from all single/double/triple input tables.
     /// Each wire position is paired with the node_id of the expression.
     pub fn collect_wire_positions(&self) -> Vec<(WirePosition, usize)> {
@@ -196,46 +195,8 @@ impl<F: Field> ExecutionTrace<F> {
     }
 }
 
-type WireMap<V> = HashMap<WirePosition, V>;
+pub type WireMap<V> = HashMap<WirePosition, V>;
 
-type FlatPermutationMap = WireMap<WirePosition>;
-
-
-/// Build a permutation trace (sigma) by linking each group of wire positions
-/// that share the same node_id in a cycle. For example, if node_id=17 appears in
-/// four distinct wire positions [p0, p1, p2, p3], we arrange them in a cycle:
-/// p0→p1, p1→p2, p2→p3, p3→p0.
-pub fn build_permutation_trace<F: Field>(trace: &ExecutionTrace<F>) -> FlatPermutationMap {
-    let grouped = trace.group_wire_positions_by_node_id();
-    let mut permutation = HashMap::new();
-
-    for (_node_id, positions) in grouped {
-        let k = positions.len();
-        if k == 1 {
-            // Trivial cycle: only one wire position
-            let p0 = positions[0].clone();
-            permutation.insert(p0.clone(), p0);
-        } else {
-            // Link them in a cycle
-            for i in 0..k {
-                let current = positions[i].clone();
-                let next = positions[(i + 1) % k].clone();
-                permutation.insert(current, next);
-            }
-        }
-    }
-
-    permutation
-}
-
-
-pub fn build_gate_map<F: Field>(trace: &ExecutionTrace<F>) -> WireMap<usize> {
-    let mut value_map = HashMap::new();
-    for (wire_pos, node_id) in trace.collect_wire_positions() {
-        value_map.insert(wire_pos, node_id);
-    }
-    value_map
-}
 
 /// A struct representing a polynomial evaluation table for gates.
 /// Each row contains up to three inputs, one output, and selector polynomials.
@@ -273,65 +234,6 @@ impl<F> PolynomialEvaluationTable<F> {
             output: Vec::with_capacity(total_rows),
             selectors,
         }
-    }
-}
-
-/// A struct that holds both the offset map and total size of all tables.
-/// This helps track where each operation's rows begin in the flattened table
-/// and the total number of rows across all operations.
-#[derive(Debug, Clone)]
-pub struct OffsetTable {
-    /// Maps operation names to their starting row index
-    pub offset_map: HashMap<String, usize>,
-    /// Total number of rows across all operations
-    pub total_rows: usize,
-}
-
-impl OffsetTable {
-    /// Builds an OffsetTable from an ExecutionTrace by computing
-    /// cumulative row counts across all operations (single/double/triple).
-    pub fn build<F: Field>(trace: &ExecutionTrace<F>) -> Self {
-        let mut offset_map = HashMap::new();
-        let mut cumulative = 0;
-
-        // Single-input operations
-        for (op_name, table) in &trace.single_input {
-            offset_map.insert(op_name.clone(), cumulative);
-            cumulative += table.rows.len();
-        }
-
-        // Double-input operations
-        for (op_name, table) in &trace.double_input {
-            offset_map.insert(op_name.clone(), cumulative);
-            cumulative += table.rows.len();
-        }
-
-        // Triple-input operations
-        for (op_name, table) in &trace.triple_input {
-            offset_map.insert(op_name.clone(), cumulative);
-            cumulative += table.rows.len();
-        }
-
-        Self {
-            offset_map,
-            total_rows: cumulative,
-        }
-    }
-
-    /// Get the starting row offset for an operation
-    pub fn get_offset(&self, op_name: &str) -> Option<usize> {
-        self.offset_map.get(op_name).copied()
-    }
-
-    /// Convert a local row index within an operation to a global row index
-    pub fn to_global_row(&self, op_name: &str, local_row: usize) -> Option<usize> {
-        self.get_offset(op_name).map(|offset| offset + local_row)
-    }
-
-    /// Convert a WirePosition to a global index in polynomials
-    pub fn to_index(&self, pos: &WirePosition) -> usize {
-        let base = self.get_offset(&pos.op_name).unwrap_or(0);
-        base + pos.row_idx
     }
 }
 
@@ -389,169 +291,3 @@ pub fn build_polynomial_evaluation_table<F: Zero + One + Clone>(
 
     poly_table
 }
-
-/// A struct representing the permutation polynomials for each wire.
-/// Each vector represents σ₁, σ₂, σ₃, σ₄ in Plonk terminology.
-#[derive(Debug, Clone)]
-pub struct PermutationPolynomials<F> {
-    /// σ₁: permutation for first input wire
-    pub sigma1: Vec<F>,
-    /// σ₂: permutation for second input wire
-    pub sigma2: Vec<F>,
-    /// σ₃: permutation for third input wire
-    pub sigma3: Vec<F>,
-    /// σ₄: permutation for output wire
-    pub sigma4: Vec<F>,
-}
-
-impl<F> PermutationPolynomials<F> {
-    pub fn new(size: usize, default: F) -> Self 
-    where 
-        F: Clone,
-    {
-        Self {
-            sigma1: vec![default.clone(); size],
-            sigma2: vec![default.clone(); size],
-            sigma3: vec![default.clone(); size],
-            sigma4: vec![default.clone(); size],
-        }
-    }
-}
-
-/// Build permutation polynomials from a flat permutation map.
-/// For each position in the circuit, compute its "next" position in the permutation cycle.
-pub fn build_permutation_polynomials<F: Field>(
-    trace: &ExecutionTrace<F>,
-    offset_table: &OffsetTable,
-    perm_map: &FlatPermutationMap,
-) -> PermutationPolynomials<F> 
-where
-    F: Clone + From<usize> + Zero,
-{
-    let mut poly = PermutationPolynomials::new(offset_table.total_rows, F::zero());
-
-    // Helper function to get the next index in the permutation
-    let get_next_index = |wire: &WirePosition| -> usize {
-        let curr_idx = offset_table.to_index(wire);
-        perm_map.get(wire)
-            .map(|next| offset_table.to_index(next))
-            .unwrap_or(curr_idx)
-    };
-
-    // Process single-input operations
-    for (op_name, table) in &trace.single_input {
-        for (row_idx, _row) in table.rows.iter().enumerate() {
-            // Current wire positions
-            let wire_in = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(0),
-            };
-            let wire_out = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Output,
-            };
-
-            // Get next positions in permutation
-            let curr_in_idx = offset_table.to_index(&wire_in);
-            poly.sigma1[curr_in_idx] = F::from(get_next_index(&wire_in));
-
-            let curr_out_idx = offset_table.to_index(&wire_out);
-            poly.sigma4[curr_out_idx] = F::from(get_next_index(&wire_out));
-
-            // For unused wires in single-input ops, point to self
-            poly.sigma2[curr_in_idx] = F::from(curr_in_idx);
-            poly.sigma3[curr_in_idx] = F::from(curr_in_idx);
-        }
-    }
-
-    // Process double-input operations
-    for (op_name, table) in &trace.double_input {
-        for (row_idx, _row) in table.rows.iter().enumerate() {
-            // Current wire positions
-            let wire_in0 = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(0),
-            };
-            let wire_in1 = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(1),
-            };
-            let wire_out = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Output,
-            };
-
-            // Get next positions in permutation
-            let curr_in0_idx = offset_table.to_index(&wire_in0);
-            poly.sigma1[curr_in0_idx] = F::from(get_next_index(&wire_in0));
-
-            let curr_in1_idx = offset_table.to_index(&wire_in1);
-            poly.sigma2[curr_in1_idx] = F::from(get_next_index(&wire_in1));
-
-            let curr_out_idx = offset_table.to_index(&wire_out);
-            poly.sigma4[curr_out_idx] = F::from(get_next_index(&wire_out));
-
-            // For unused wire in double-input ops, point to self
-            poly.sigma3[curr_in0_idx] = F::from(curr_in0_idx);
-        }
-    }
-
-    // Process triple-input operations
-    for (op_name, table) in &trace.triple_input {
-        for (row_idx, _row) in table.rows.iter().enumerate() {
-            // Current wire positions
-            let wire_in0 = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(0),
-            };
-            let wire_in1 = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(1),
-            };
-            let wire_in2 = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Input(2),
-            };
-            let wire_out = WirePosition {
-                op_name: op_name.clone(),
-                row_idx,
-                wire_type: WireType::Output,
-            };
-
-            // Get next positions in permutation
-            let curr_in0_idx = offset_table.to_index(&wire_in0);
-            poly.sigma1[curr_in0_idx] = F::from(get_next_index(&wire_in0));
-
-            let curr_in1_idx = offset_table.to_index(&wire_in1);
-            poly.sigma2[curr_in1_idx] = F::from(get_next_index(&wire_in1));
-
-            let curr_in2_idx = offset_table.to_index(&wire_in2);
-            poly.sigma3[curr_in2_idx] = F::from(get_next_index(&wire_in2));
-
-            let curr_out_idx = offset_table.to_index(&wire_out);
-            poly.sigma4[curr_out_idx] = F::from(get_next_index(&wire_out));
-        }
-    }
-
-    poly
-}
-
-// This function builds the accumulation polynomial combining the wire permutation polynomials.
-// It takes the permutation polynomials and compute the recursive relation for the accumulation polynomial.
-// Namely, expression of this polynomial is Z(w^(i + 1)) = Z(w^i) * (w^i + bind_offset) + bind_multiplier_constant.
-// pub fn build_accumulation_polynomial<F>(
-//     perm_polys: &PermutationPolynomials<F>,
-//     wire_map: &WireMap<F>,
-//     bind_offset: usize,
-//     bind_multiplier_constant: usize,
-// ) -> Polynomial<F> {
-//     todo!()
-// }
