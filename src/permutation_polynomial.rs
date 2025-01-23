@@ -3,7 +3,7 @@
 //! permutation cycles between wire positions, while the constraint polynomial ensures the
 //! permutation relationship is satisfied.
 
-use crate::{execution_trace::{AllOpTraces, ExecutionTrace, PolynomialEvaluationTable, WireMap, WirePosition, WireType}, offset_table::OffsetTable, polynomial_utils::evaluations_to_dense_polynomial};
+use crate::{execution_trace::{AllOpTraces, ExecutionTrace, GateEvaluationTable, WireMap, WirePosition, WireType}, offset_table::OffsetTable, polynomial_utils::evaluations_to_dense_polynomial};
 use ark_ff::{FftField, Field};
 use ark_poly::{univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain};
 use std::collections::HashMap;
@@ -96,16 +96,16 @@ where
     };
 
     // Process single-input operations
-    for (op_name, table) in &trace.single_input {
+    for (op_kind, table) in &trace.single_input {
         for (row_idx, _row) in table.rows.iter().enumerate() {
             // Current wire positions
             let wire_in = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(0),
             };
             let wire_out = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Output,
             };
@@ -124,21 +124,21 @@ where
     }
 
     // Process double-input operations
-    for (op_name, table) in &trace.double_input {
+    for (op_kind, table) in &trace.double_input {
         for (row_idx, _row) in table.rows.iter().enumerate() {
             // Current wire positions
             let wire_in0 = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(0),
             };
             let wire_in1 = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(1),
             };
             let wire_out = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Output,
             };
@@ -159,26 +159,26 @@ where
     }
 
     // Process triple-input operations
-    for (op_name, table) in &trace.triple_input {
+    for (op_kind, table) in &trace.triple_input {
         for (row_idx, _row) in table.rows.iter().enumerate() {
             // Current wire positions
             let wire_in0 = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(0),
             };
             let wire_in1 = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(1),
             };
             let wire_in2 = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Input(2),
             };
             let wire_out = WirePosition {
-                op_name: op_name.clone(),
+                op_kind: op_kind.clone(),
                 row_idx,
                 wire_type: WireType::Output,
             };
@@ -216,7 +216,7 @@ where
 ///
 pub fn build_grand_product_evaluation_polynomial<F: Field>(
     permutation_table: &PermutationTable<usize>,
-    evaluation_table: &PolynomialEvaluationTable<F>,
+    evaluation_table: &GateEvaluationTable<F>,
     beta: F,
     gamma: F,
 ) -> Vec<F> {
@@ -271,7 +271,7 @@ pub struct PermutationPolynomials<F: Field> {
 
 pub fn build_permutation_polynomials<F: FftField>(
     permutation_table: &PermutationTable<usize>,
-    evaluation_table: &PolynomialEvaluationTable<F>,
+    evaluation_table: &GateEvaluationTable<F>,
     beta: F,
     gamma: F,
     coset_domain: &GeneralEvaluationDomain<F>,
@@ -310,7 +310,7 @@ pub fn build_permutation_polynomials<F: FftField>(
 /// The result is returned in coefficient form as a DensePolynomial<F>.
 pub fn build_permutation_constraint_evaluation_polynomial<F: FftField>(
     polynomials: &PermutationPolynomials<F>,
-    evaluation_table: &PolynomialEvaluationTable<F>,
+    evaluation_table: &GateEvaluationTable<F>,
     beta: F,
     gamma: F,
     // A domain with "unit steps": {1, ω, ω^2, ... , ω^(n-1)}

@@ -52,6 +52,19 @@ pub enum AST<M> {
     If(Box<AST<M>>, Box<AST<M>>, Box<AST<M>>, M),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ASTKind {
+    Int,
+    Bool,
+    Add,
+    Sub,
+    Mult,
+    Div,
+    Eq,
+    Not,
+    If,
+}
+
 /// Simple struct for environment (assign IDs, hold cache if you like).
 /// We'll keep a cache that maps the pointer of the "old" AST<()> node
 /// to the newly transformed AST<NodeMeta>.
