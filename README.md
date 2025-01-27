@@ -19,5 +19,4 @@ This project is a compiler for the PLONK proof system. It takes a lambda-based c
         - [ ] Verify KZG proofs
         - [ ] Implement the PLONK Verifier constraints
     - [ ] Implement the verifier
-
-
+    - [ ] Implement blinding of the wire polynomials
