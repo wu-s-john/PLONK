@@ -6,6 +6,8 @@ mod execution_trace;
 mod offset_table;
 mod permutation_polynomial;
 mod polynomial_utils;
+use ark_poly_commit::{kzg10, PolynomialCommitment};
+
 
 fn main() {
     let mut rng = test_rng();

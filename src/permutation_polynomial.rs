@@ -3,7 +3,7 @@
 //! permutation cycles between wire positions, while the constraint polynomial ensures the
 //! permutation relationship is satisfied.
 
-use crate::{execution_trace::{AllOpTraces, ExecutionTrace, GateEvaluationTable, WireMap, WirePosition, WireType}, offset_table::OffsetTable, polynomial_utils::evaluations_to_dense_polynomial};
+use crate::{execution_trace::{AllOpTraces, ExecutionTrace, GateEvaluationTable, GatePolynomials, WireMap, WirePosition, WireType}, offset_table::OffsetTable, polynomial_utils::evaluations_to_dense_polynomial};
 use ark_ff::{FftField, Field};
 use ark_poly::{univariate::DensePolynomial, EvaluationDomain, GeneralEvaluationDomain};
 use std::collections::HashMap;
@@ -298,73 +298,75 @@ pub fn build_permutation_polynomials<F: FftField>(
 }
 
 /// Builds the permutation constraint polynomial E(X), whose i-th evaluation is:
-/// E(ω^i) = Z(ω^(i+1)) * ∏(wᵢ(j) + β * j + γ)  −  Z(ω^i) * ∏(wᵢ(j) + β * σᵢ(j) + γ)
+/// E(ω^i) = Z(ω^(i+1)) * ∏(wᵢ(ω^i) + β * i + γ) − Z(ω^i) * ∏(wᵢ(ω^i) + β * σᵢ(ω^i) + γ)
 ///
 /// Here,
 ///   • ω is a primitive n-th root of unity (for the evaluation_domain),
 ///   • Z(X) is the grand product polynomial,
-///   • wᵢ(j) are the wire polynomials evaluated at row j (or at ω^j),
-///   • σᵢ(j) are the permutation polynomials evaluated at ω^j,
+///   • wᵢ(ω^i) are the wire polynomials evaluated at row i (or at ω^i),
+///   • σᵢ(ω^i) are the permutation polynomials evaluated at ω^i,
 ///   • β, γ are Plonk's permutation coefficients.
-/// 
-/// The result is returned in coefficient form as a DensePolynomial<F>.
+///
+/// The result is returned as a vector of evaluations E(ω^i). You can convert it
+/// to a DensePolynomial afterward or compose it in your workflow.
 pub fn build_permutation_constraint_evaluation_polynomial<F: FftField>(
     polynomials: &PermutationPolynomials<F>,
-    evaluation_table: &GateEvaluationTable<F>,
+    gate_polynomials: &GatePolynomials<F>,
     beta: F,
     gamma: F,
-    // A domain with "unit steps": {1, ω, ω^2, ... , ω^(n-1)}
+    // A domain with "unit steps": {1, ω, ω^2, ..., ω^(n-1)}
     evaluation_domain: &GeneralEvaluationDomain<F>,
 ) -> Vec<F> {
     let n = evaluation_domain.size();
-    // 1) Evaluate Z and σ polynomials at each point ω^i in the evaluation_domain.
+    
+    // 1) Evaluate Z and the σ polynomials at each point ω^i in the evaluation_domain.
     let z_evals = polynomials.z.evaluate_over_domain_by_ref(*evaluation_domain);
     let sigma1_evals = polynomials.sigma1.evaluate_over_domain_by_ref(*evaluation_domain);
     let sigma2_evals = polynomials.sigma2.evaluate_over_domain_by_ref(*evaluation_domain);
     let sigma3_evals = polynomials.sigma3.evaluate_over_domain_by_ref(*evaluation_domain);
     let sigma_output_evals = polynomials.sigma_output.evaluate_over_domain_by_ref(*evaluation_domain);
 
-    // 2) For each i, compute wire values wᵢ(ω^i). In this basic implementation, we'll
-    //    assume evaluation_table's values align 1–1 with these domain points.
-    //    (i.e. w1(ω^i) = evaluation_table.input1[i], etc.)
-    //    If your actual code uses interpolation or a coset shift, adjust as needed.
-    let input1 = &evaluation_table.input1;
-    let input2 = &evaluation_table.input2;
-    let input3 = &evaluation_table.input3;
-    let output = &evaluation_table.output;
+    // 2) Evaluate the gate wire polynomials at each point ω^i.
+    //    These produce n evaluations for w1, w2, w3, w4 across the domain.
+    let w1_evals = gate_polynomials.input1.evaluate_over_domain_by_ref(*evaluation_domain);
+    let w2_evals = gate_polynomials.input2.evaluate_over_domain_by_ref(*evaluation_domain);
+    let w3_evals = gate_polynomials.input3.evaluate_over_domain_by_ref(*evaluation_domain);
+    let w4_evals = gate_polynomials.output.evaluate_over_domain_by_ref(*evaluation_domain);
 
     // 3) Build E(ω^i) for i in [0..n):
-    //      E(ω^i) = Z(ω^(i+1)) * ∏(wᵢ(i) + β * i + γ) − Z(ω^i) * ∏( wᵢ(i) + β * σᵢ(ω^i) + γ )
+    //    E(ω^i) = Z(ω^(i+1)) * ∏(wᵢ(ω^i) + β * i + γ)
+    //            − Z(ω^i)     * ∏(wᵢ(ω^i) + β * σᵢ(ω^i) + γ)
     //    Store these E-values in constraint_evals.
     let mut constraint_evals = vec![F::zero(); n];
     for i in 0..n {
-        let w1 = input1[i];
-        let w2 = input2[i];
-        let w3 = input3[i];
-        let w4 = output[i];
+        let w1_val = w1_evals[i];
+        let w2_val = w2_evals[i];
+        let w3_val = w3_evals[i];
+        let w4_val = w4_evals[i];
 
         let z_next = z_evals[(i + 1) % n];  // Z(ω^(i+1))
         let z_cur = z_evals[i];            // Z(ω^i)
 
-        // Convert i to field for the j index in the "wᵢ + β * j + γ" term
+        // Convert i to field for the j index in the "wᵢ + β * i + γ" term
         let i_as_field = F::from(i as u64);
 
-        // ∏(wᵢ(i) + β * i + γ)
-        let lhs_product = (w1 + beta * i_as_field + gamma)
-            * (w2 + beta * i_as_field + gamma)
-            * (w3 + beta * i_as_field + gamma)
-            * (w4 + beta * i_as_field + gamma);
+        // Left product: ∏(wᵢ(ω^i) + β * i + γ)
+        let lhs_product =
+            (w1_val + beta * i_as_field + gamma)
+            * (w2_val + beta * i_as_field + gamma)
+            * (w3_val + beta * i_as_field + gamma)
+            * (w4_val + beta * i_as_field + gamma);
 
-        // ∏(wᵢ(i) + β * σᵢ(ω^i) + γ), using the σ-evals
+        // Right product: ∏(wᵢ(ω^i) + β * σᵢ(ω^i) + γ)
         let s1 = sigma1_evals[i];
         let s2 = sigma2_evals[i];
         let s3 = sigma3_evals[i];
         let s4 = sigma_output_evals[i];
-
-        let rhs_product = (w1 + beta * s1 + gamma)
-            * (w2 + beta * s2 + gamma)
-            * (w3 + beta * s3 + gamma)
-            * (w4 + beta * s4 + gamma);
+        let rhs_product =
+            (w1_val + beta * s1 + gamma)
+            * (w2_val + beta * s2 + gamma)
+            * (w3_val + beta * s3 + gamma)
+            * (w4_val + beta * s4 + gamma);
 
         // E(ω^i)
         constraint_evals[i] = z_next * lhs_product - z_cur * rhs_product;

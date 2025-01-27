@@ -305,7 +305,7 @@ pub fn build_gate_evaluation_table<F: Zero + One + Clone>(
 ///   - input1, input2, input3, output
 ///   - a set of "selector" polynomials, one per gate kind.
 #[derive(Debug, Clone)]
-pub struct GatePolynomial<F: FftField> {
+pub struct GatePolynomials<F: FftField> {
     pub input1: ark_poly::univariate::DensePolynomial<F>,
     pub input2: ark_poly::univariate::DensePolynomial<F>,
     pub input3: ark_poly::univariate::DensePolynomial<F>,
@@ -318,7 +318,7 @@ pub struct GatePolynomial<F: FftField> {
 pub fn gate_evaluation_table_to_gate_polynomial<F: FftField>(
     table: &GateEvaluationTable<F>,
     coset_domain: &GeneralEvaluationDomain<F>,
-) -> GatePolynomial<F> {
+) -> GatePolynomials<F> {
     // Interpolate the main wires
     let input1_poly = evaluations_to_dense_polynomial(&table.input1, coset_domain);
     let input2_poly = evaluations_to_dense_polynomial(&table.input2, coset_domain);
@@ -334,7 +334,7 @@ pub fn gate_evaluation_table_to_gate_polynomial<F: FftField>(
         );
     }
 
-    GatePolynomial {
+    GatePolynomials {
         input1: input1_poly,
         input2: input2_poly,
         input3: input3_poly,
@@ -355,7 +355,7 @@ pub fn gate_evaluation_table_to_gate_polynomial<F: FftField>(
 ///   let constraint_poly = evaluations_to_dense_polynomial(&constraint_evals, &domain);
 ///
 pub fn build_gate_constraint_evaluation_polynomial<F: FftField>(
-    gate_poly: &GatePolynomial<F>,
+    gate_poly: &GatePolynomials<F>,
     domain: &GeneralEvaluationDomain<F>,
 ) -> Vec<F> {
     // 1) Evaluate each main wire polynomial (input1, input2, input3, output) over the domain
