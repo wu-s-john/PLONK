@@ -12,4 +12,140 @@ lalrpop_mod!(pub parser, "/language_frontend/parser.rs");
 
 pub use ast::{Expr, Type, Value};
 pub use evaluator::eval;
-pub use type_checker::type_check; 
+pub use type_checker::type_check;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::language_frontend::lexer::lex;
+
+    fn parse_and_eval(input: &str) -> Result<Value, String> {
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = *parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .map_err(|e| format!("Parse error: {:?}", e))?;
+        
+        let typ = type_check(&ast)
+            .map_err(|e| format!("Type error: {:?}", e))?;
+            
+        eval(&ast)
+            .map_err(|e| format!("Evaluation error: {:?}", e))
+    }
+
+    #[test]
+    fn test_arithmetic() {
+        // Test basic arithmetic
+        let input = "let x = 5 in let y = 3 in x + y * 2";
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .unwrap();
+        
+        println!("Arithmetic AST: {:?}", ast);
+        
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Int(11)));
+    }
+
+    #[test]
+    fn test_function_application() {
+        // Test function application with a simple increment function
+        let input = "let inc = fun x -> x + 1 in inc 5";
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .unwrap();
+        
+        println!("Function Application AST: {:?}", ast);
+        
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Int(6)));
+    }
+
+    #[test]
+    fn test_nested_functions() {
+        // Test nested function definitions and applications
+        let input = "let add = fun x -> fun y -> x + y in (add 3) 4";
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .unwrap();
+        
+        println!("Nested Functions AST: {:?}", ast);
+        
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Int(7)));
+    }
+
+    #[test]
+    fn test_boolean_operations() {
+        // Test boolean operations
+        let input = "let x = true && false in let y = true || false in y";
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .unwrap();
+        
+        println!("Boolean Operations AST: {:?}", ast);
+        
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_complex_expression() {
+        // Test a more complex expression combining functions, arithmetic, and let bindings
+        let input = "
+            let compose = fun f -> fun g -> fun x -> f (g x) in
+            let add1 = fun x -> x + 1 in
+            let mul2 = fun x -> x * 2 in
+            let composed = compose add1 mul2 in
+            composed 5
+        ";
+        let tokens = lex(input);
+        let token_triples: Vec<_> = tokens.into_iter().enumerate()
+            .map(|(i, t)| (i, t, i + 1))
+            .collect();
+        
+        let ast = parser::ExprParser::new()
+            .parse(token_triples.into_iter())
+            .unwrap();
+        
+        println!("Complex Expression AST: {:?}", ast);
+        
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Int(11))); // (5 * 2) + 1 = 11
+    }
+
+    #[test]
+    fn test_type_errors() {
+        // Test type error detection
+        let input = "let x = true + 1 in x";
+        let result = parse_and_eval(input);
+        assert!(result.is_err());
+        
+        let input = "let f = fun x -> x + 1 in f true";
+        let result = parse_and_eval(input);
+        assert!(result.is_err());
+    }
+} 

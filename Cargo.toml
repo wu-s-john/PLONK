@@ -2,13 +2,46 @@
 name = "plonk"
 version = "0.1.0"
 edition = "2021"
+exclude = [
+    ".history/"
+]
 
 [dependencies]
-ark-ec = "0.3"
-ark-ff = "0.3"
-ark-std = "0.3"
-ark-relations = "0.3"
-ark-crypto-primitives = "0.3"
-ark-groth16 = "0.3"
-ark-poly = "0.3" 
-ark-poly-commit = "0.3"
+logos = "0.12.0"
+lalrpop-util = "0.22"
+ark-bn254 = "0.3"
+
+[build-dependencies]
+lalrpop = "0.22"
+
+[dependencies.ark-ff]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-ec]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-poly]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-std]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-relations]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-crypto-primitives]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-groth16]
+version = "0.3"
+default-features = false
+
+[dependencies.ark-poly-commit]
+version = "0.3"
+default-features = false

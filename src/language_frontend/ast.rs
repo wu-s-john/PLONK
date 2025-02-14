@@ -23,6 +23,7 @@ pub enum Type {
     Int,
     Bool,
     Fun(Box<Type>, Box<Type>), // Function type T1 -> T2
+    TVar(usize),               // Type variable for type inference
 }
 
 // Runtime values
@@ -67,6 +68,18 @@ impl std::fmt::Display for Type {
             Type::Int => write!(f, "Int"),
             Type::Bool => write!(f, "Bool"),
             Type::Fun(t1, t2) => write!(f, "({} -> {})", t1, t2),
+            Type::TVar(id) => write!(f, "α{}", id),  // Use α for type variables
+        }
+    }
+}
+
+// Pretty printing for Value
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Int(n) => write!(f, "{}", n),
+            Value::Bool(b) => write!(f, "{}", b),
+            Value::Closure(param, body, _) => write!(f, "<closure: fun {} -> {}>", param, body),
         }
     }
 } 
