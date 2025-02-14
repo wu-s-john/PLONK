@@ -1,0 +1,71 @@
+use std::str::FromStr;
+use crate::language_frontend::ast::{Expr, BinOp};
+use crate::language_frontend::lexer::Token;
+
+grammar;
+
+extern {
+    type Location = usize;
+    type Error = String;
+
+    enum Token {
+        "let" => Token::Let,
+        "in" => Token::In,
+        "fun" => Token::Fun,
+        "->" => Token::Arrow,
+        "+" => Token::Plus,
+        "-" => Token::Minus,
+        "*" => Token::Star,
+        "&&" => Token::And,
+        "||" => Token::Or,
+        "=" => Token::Equals,
+        "(" => Token::LParen,
+        ")" => Token::RParen,
+        "true" => Token::True,
+        "false" => Token::False,
+        Number => Token::Int(<i64>),
+        Id => Token::Ident(<String>),
+    }
+}
+
+pub Expr: Box<Expr> = {
+    Let => Box::new(<>),
+    Lambda => Box::new(<>),
+    BinOp,
+};
+
+Let: Expr = {
+    "let" <name:Id> "=" <e1:Expr> "in" <e2:Expr> => 
+        Expr::Let(name, e1, e2),
+};
+
+Lambda: Expr = {
+    "fun" <param:Id> "->" <body:Expr> =>
+        Expr::Lam(param, body),
+};
+
+BinOp: Box<Expr> = {
+    <l:BinOp> "+" <r:Term> => Box::new(Expr::BinOp(BinOp::Add, l, r)),
+    <l:BinOp> "-" <r:Term> => Box::new(Expr::BinOp(BinOp::Sub, l, r)),
+    <l:BinOp> "&&" <r:Term> => Box::new(Expr::BinOp(BinOp::And, l, r)),
+    <l:BinOp> "||" <r:Term> => Box::new(Expr::BinOp(BinOp::Or, l, r)),
+    Term,
+};
+
+Term: Box<Expr> = {
+    <l:Term> "*" <r:Factor> => Box::new(Expr::BinOp(BinOp::Mul, l, r)),
+    Factor,
+};
+
+Factor: Box<Expr> = {
+    <f:Factor> <a:Atom> => Box::new(Expr::App(f, a)),
+    Atom,
+};
+
+Atom: Box<Expr> = {
+    Number => Box::new(Expr::Int(<>)),
+    "true" => Box::new(Expr::Bool(true)),
+    "false" => Box::new(Expr::Bool(false)),
+    Id => Box::new(Expr::Var(<>)),
+    "(" <e:Expr> ")" => e,
+}; 
