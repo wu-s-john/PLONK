@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use crate::language_frontend::{ast as lang_ast, lexer, type_checker, evaluator};
 use crate::language_frontend::parser;
 
-mod ast;
+mod plonk_circuit;
 mod execution_trace;
 mod offset_table;
 mod permutation_polynomial;

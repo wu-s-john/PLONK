@@ -5,7 +5,7 @@ use ark_poly::univariate::DensePolynomial;
 use ark_poly::EvaluationDomain;
 use ark_poly::{GeneralEvaluationDomain, Polynomial};
 
-use crate::ast::{ASTKind, NodeMeta};
+use crate::plonk_circuit::{PlonkNodeKind, NodeMeta};
 use crate::offset_table::OffsetTable;
 use crate::polynomial_utils::evaluations_to_dense_polynomial;
 
@@ -18,16 +18,6 @@ pub struct ExecutionTable<F, const N: usize> {
     pub rows: Vec<RowExecution<F, N>>,
 }
 
-impl<F, const N: usize> ExecutionTable<F, N> {
-    pub fn new() -> Self {
-        Self { rows: Vec::new() }
-    }
-
-    /// Push a new row's data.
-    pub fn push_row(&mut self, inputs: [F; N], output: F) {
-        self.rows.push(RowExecution { inputs, output });
-    }
-}
 
 /// A struct that keeps three separate maps:
 ///  - single_input:  1-input operations
@@ -36,9 +26,9 @@ impl<F, const N: usize> ExecutionTable<F, N> {
 ///
 ///  Each map stores a string -> ExecutionTable<F, N>, where N is 1, 2, or 3 respectively.
 pub struct AllOpTraces<F> {
-    pub single_input: HashMap<ASTKind, ExecutionTable<F, 1>>,
-    pub double_input: HashMap<ASTKind, ExecutionTable<F, 2>>,
-    pub triple_input: HashMap<ASTKind, ExecutionTable<F, 3>>,
+    pub single_input: HashMap<PlonkNodeKind, ExecutionTable<F, 1>>,
+    pub double_input: HashMap<PlonkNodeKind, ExecutionTable<F, 2>>,
+    pub triple_input: HashMap<PlonkNodeKind, ExecutionTable<F, 3>>,
 }
 
 impl<F> AllOpTraces<F> {
@@ -52,33 +42,33 @@ impl<F> AllOpTraces<F> {
 
     /// Insert a 1-input operation table.
     /// e.g. "NOT" with an ExecutionTable<F,1>.
-    pub fn insert_single_op(&mut self, kind: ASTKind, table: ExecutionTable<F, 1>) {
+    pub fn insert_single_op(&mut self, kind: PlonkNodeKind, table: ExecutionTable<F, 1>) {
         self.single_input.insert(kind, table);
     }
 
     /// Insert a 2-input operation table.
     /// e.g. "ADD" with an ExecutionTable<F,2>.
-    pub fn insert_double_op(&mut self, kind: ASTKind, table: ExecutionTable<F, 2>) {
+    pub fn insert_double_op(&mut self, kind: PlonkNodeKind, table: ExecutionTable<F, 2>) {
         self.double_input.insert(kind, table);
     }
 
     /// Insert a 3-input operation table.
-    pub fn insert_triple_op(&mut self, kind: ASTKind, table: ExecutionTable<F, 3>) {
+    pub fn insert_triple_op(&mut self, kind: PlonkNodeKind, table: ExecutionTable<F, 3>) {
         self.triple_input.insert(kind, table);
     }
 
     /// Get a reference to a 1-input operation table by kind.
-    pub fn get_single_op(&self, kind: &ASTKind) -> Option<&ExecutionTable<F, 1>> {
+    pub fn get_single_op(&self, kind: &PlonkNodeKind) -> Option<&ExecutionTable<F, 1>> {
         self.single_input.get(kind)
     }
 
     /// Get a reference to a 2-input operation table by kind.
-    pub fn get_double_op(&self, kind: &ASTKind) -> Option<&ExecutionTable<F, 2>> {
+    pub fn get_double_op(&self, kind: &PlonkNodeKind) -> Option<&ExecutionTable<F, 2>> {
         self.double_input.get(kind)
     }
 
     /// Get a reference to a 3-input operation table by kind.
-    pub fn get_triple_op(&self, kind: &ASTKind) -> Option<&ExecutionTable<F, 3>> {
+    pub fn get_triple_op(&self, kind: &PlonkNodeKind) -> Option<&ExecutionTable<F, 3>> {
         self.triple_input.get(kind)
     }
 }
@@ -88,7 +78,7 @@ pub type ExecutionTrace<F: Field> = AllOpTraces<NodeMeta<F>>;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WirePosition {
     /// Which operation kind (e.g., ASTKind::Add, ASTKind::Not, etc.)
-    pub op_kind: ASTKind,
+    pub op_kind: PlonkNodeKind,
     /// Row index in the operation's table
     pub row_idx: usize,
     /// Type of wire and its position (if input)
@@ -210,7 +200,7 @@ pub struct GateEvaluationTable<F> {
     /// Maps operation kinds to their selector polynomial evaluations.
     /// For each operation, the selector polynomial evaluates to 1 at rows where
     /// that operation is active, and 0 elsewhere.
-    pub selectors: HashMap<ASTKind, Vec<F>>,
+    pub selectors: HashMap<PlonkNodeKind, Vec<F>>,
 }
 
 impl<F> GateEvaluationTable<F> {
@@ -310,7 +300,7 @@ pub struct GatePolynomials<F: FftField> {
     pub input2: ark_poly::univariate::DensePolynomial<F>,
     pub input3: ark_poly::univariate::DensePolynomial<F>,
     pub output: ark_poly::univariate::DensePolynomial<F>,
-    pub selectors: HashMap<ASTKind, ark_poly::univariate::DensePolynomial<F>>,
+    pub selectors: HashMap<PlonkNodeKind, ark_poly::univariate::DensePolynomial<F>>,
 }
 
 /// Converts a GateEvaluationTable<F> into a GatePolynomial<F> by interpolating
@@ -365,7 +355,7 @@ pub fn build_gate_constraint_evaluation_polynomial<F: FftField>(
     let output_evals = gate_poly.output.evaluate_over_domain_by_ref(*domain).evals;
 
     // 2) Evaluate each selector polynomial over the domain
-    let mut selector_evals_map: HashMap<ASTKind, Vec<F>> = HashMap::new();
+    let mut selector_evals_map: HashMap<PlonkNodeKind, Vec<F>> = HashMap::new();
     for (kind, s_poly) in &gate_poly.selectors {
         let s_evals = s_poly.evaluate_over_domain_by_ref(*domain).evals;
         selector_evals_map.insert(kind.clone(), s_evals);
@@ -393,30 +383,30 @@ pub fn build_gate_constraint_evaluation_polynomial<F: FftField>(
             // Polynomial expression that must vanish if the gate is active
             let gate_expr = match kind {
                 // (1) and (2) – no constraint needed for compile-time constants, skipping
-                ASTKind::Int => F::zero(),
-                ASTKind::Bool => F::zero(),
+                PlonkNodeKind::Int => F::zero(),
+                PlonkNodeKind::Bool => F::zero(),
 
                 // c - (a + b) = 0
-                ASTKind::Add => out - (a + b),
+                PlonkNodeKind::Add => out - (a + b),
 
                 // c - (a - b) = 0  => c - a + b
-                ASTKind::Sub => out - (a - b),
+                PlonkNodeKind::Sub => out - (a - b),
 
                 // c - a*b = 0
-                ASTKind::Mult => out - (a * b),
+                PlonkNodeKind::Mult => out - (a * b),
 
                 // c*b - a = 0
-                ASTKind::Div => out * b - a,
+                PlonkNodeKind::Div => out * b - a,
 
                 // eq*(a - b) = 0 (skipped eq being boolean)
-                ASTKind::Eq => out * (a - b),
+                PlonkNodeKind::Eq => out * (a - b),
 
                 // y + x - 1 = 0  (skipped boolean check on x)
-                ASTKind::Not => out + a - F::one(),
+                PlonkNodeKind::Not => out + a - F::one(),
 
                 // r - [ cond*t + (1-cond)*e ] = 0
                 //   skipping the boolean check for cond
-                ASTKind::If => {
+                PlonkNodeKind::If => {
                     // cond = a, then_expr = b, else_expr = c, out = r
                     let one_minus_a = F::one() - a;
                     out - (a * b + one_minus_a * c)

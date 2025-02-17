@@ -23,7 +23,7 @@ pub enum EvalError {
 }
 
 #[derive(Debug, Clone)]
-pub enum AST<M> {
+pub enum PlonkNode<M> {
     /// Represents an integer constant
     Int(i64, M),
 
@@ -31,29 +31,29 @@ pub enum AST<M> {
     Bool(bool, M),
 
     /// (expr + expr)
-    Add(Box<AST<M>>, Box<AST<M>>, M),
+    Add(Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 
     /// (expr - expr)
-    Sub(Box<AST<M>>, Box<AST<M>>, M),
+    Sub(Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 
     /// (expr * expr)
-    Mult(Box<AST<M>>, Box<AST<M>>, M),
+    Mult(Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 
     /// (expr / expr)
-    Div(Box<AST<M>>, Box<AST<M>>, M),
+    Div(Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 
     /// (expr == expr)
-    Eq(Box<AST<M>>, Box<AST<M>>, M),
+    Eq(Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 
     /// Boolean NOT
-    Not(Box<AST<M>>, M),
+    Not(Box<PlonkNode<M>>, M),
 
     /// If-then-else
-    If(Box<AST<M>>, Box<AST<M>>, Box<AST<M>>, M),
+    If(Box<PlonkNode<M>>, Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ASTKind {
+pub enum PlonkNodeKind {
     Int,
     Bool,
     Add,
@@ -70,7 +70,7 @@ pub enum ASTKind {
 /// to the newly transformed AST<NodeMeta>.
 struct Env {
     next_id: usize,
-    cache: HashMap<*const AST<()>, AST<NodeMeta<EvalValue>>>
+    cache: HashMap<*const PlonkNode<()>, PlonkNode<NodeMeta<EvalValue>>>
 }
 
 impl Env {
@@ -90,18 +90,18 @@ impl Env {
 }
 
 /// Helper so AST<NodeMeta> can return its metadata easily.
-impl<M> AST<M> {
+impl<M> PlonkNode<M> {
     pub fn meta(&self) -> &M {
         match self {
-            AST::Int(_, m)
-            | AST::Bool(_, m)
-            | AST::Add(_, _, m)
-            | AST::Sub(_, _, m)
-            | AST::Mult(_, _, m)
-            | AST::Div(_, _, m)
-            | AST::Eq(_, _, m)
-            | AST::Not(_, m)
-            | AST::If(_, _, _, m) => m,
+            PlonkNode::Int(_, m)
+            | PlonkNode::Bool(_, m)
+            | PlonkNode::Add(_, _, m)
+            | PlonkNode::Sub(_, _, m)
+            | PlonkNode::Mult(_, _, m)
+            | PlonkNode::Div(_, _, m)
+            | PlonkNode::Eq(_, _, m)
+            | PlonkNode::Not(_, m)
+            | PlonkNode::If(_, _, _, m) => m,
         }
     }
 }
@@ -110,9 +110,9 @@ impl<M> AST<M> {
 /// Now uses a cache to avoid recomputing the same AST node multiple times.
 /// (Most pure AST trees won't share the exact same pointer for subtrees,
 /// but if you do have shared subtrees, the cache will skip repeated work.)
-fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<NodeMeta<EvalValue>>, EvalError> {
+fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result<PlonkNode<NodeMeta<EvalValue>>, EvalError> {
     // If we've already computed this node, return the cached result.
-    let expr_ptr = expr as *const AST<()>;
+    let expr_ptr = expr as *const PlonkNode<()>;
     if let Some(already_computed) = env.cache.get(&expr_ptr) {
         return Ok(already_computed.clone());
     }
@@ -121,9 +121,9 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
         // -----------------
         // Constants
         // -----------------
-        AST::Int(value, ()) => {
+        PlonkNode::Int(value, ()) => {
             let id = env.fresh_id();
-            AST::Int(
+            PlonkNode::Int(
                 *value,
                 NodeMeta {
                     node_id: id,
@@ -131,9 +131,9 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
                 },
             )
         }
-        AST::Bool(b, ()) => {
+        PlonkNode::Bool(b, ()) => {
             let id = env.fresh_id();
-            AST::Bool(
+            PlonkNode::Bool(
                 *b,
                 NodeMeta {
                     node_id: id,
@@ -145,7 +145,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
         // -----------------
         // Arithmetic
         // -----------------
-        AST::Add(lhs, rhs, ()) => {
+        PlonkNode::Add(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
@@ -164,7 +164,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             };
 
             let evaluated_value = EvalValue::IntVal(lval + rval);
-            AST::Add(
+            PlonkNode::Add(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
@@ -174,7 +174,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             )
         }
 
-        AST::Sub(lhs, rhs, ()) => {
+        PlonkNode::Sub(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
@@ -192,7 +192,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             };
 
             let evaluated_value = EvalValue::IntVal(lval - rval);
-            AST::Sub(
+            PlonkNode::Sub(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
@@ -202,7 +202,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             )
         }
 
-        AST::Mult(lhs, rhs, ()) => {
+        PlonkNode::Mult(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
@@ -220,7 +220,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             };
 
             let evaluated_value = EvalValue::IntVal(lval * rval);
-            AST::Mult(
+            PlonkNode::Mult(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
@@ -230,7 +230,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             )
         }
 
-        AST::Div(lhs, rhs, ()) => {
+        PlonkNode::Div(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
@@ -252,7 +252,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             }
 
             let evaluated_value = EvalValue::IntVal(lval / rval);
-            AST::Div(
+            PlonkNode::Div(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
@@ -265,7 +265,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
         // -----------------
         // Comparisons
         // -----------------
-        AST::Eq(lhs, rhs, ()) => {
+        PlonkNode::Eq(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
@@ -283,7 +283,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
                 }
             };
 
-            AST::Eq(
+            PlonkNode::Eq(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
@@ -296,7 +296,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
         // -----------------
         // Boolean NOT
         // -----------------
-        AST::Not(sub, ()) => {
+        PlonkNode::Not(sub, ()) => {
             let sub_w_meta = add_metadata_and_eval_internal(sub, env)?;
             let id = env.fresh_id();
 
@@ -310,7 +310,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
             };
 
             let evaluated_value = EvalValue::BoolVal(!sb);
-            AST::Not(
+            PlonkNode::Not(
                 Box::new(sub_w_meta),
                 NodeMeta {
                     node_id: id,
@@ -322,7 +322,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
         // -----------------
         // If-then-else
         // -----------------
-        AST::If(cond, then_branch, else_branch, ()) => {
+        PlonkNode::If(cond, then_branch, else_branch, ()) => {
             let cond_w_meta = add_metadata_and_eval_internal(cond, env)?;
             let then_w_meta = add_metadata_and_eval_internal(then_branch, env)?;
             let else_w_meta = add_metadata_and_eval_internal(else_branch, env)?;
@@ -340,7 +340,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
                 }
             };
 
-            AST::If(
+            PlonkNode::If(
                 Box::new(cond_w_meta),
                 Box::new(then_w_meta),
                 Box::new(else_w_meta),
@@ -358,7 +358,7 @@ fn add_metadata_and_eval_internal(expr: &AST<()>, env: &mut Env) -> Result<AST<N
 }
 
 /// A top-level function that creates an Env and calls add_metadata_and_eval_internal.
-fn eval_ast(expr: &AST<()>) -> Result<AST<NodeMeta<EvalValue>>, EvalError> {
+pub fn eval_plonk_node(expr: &PlonkNode<()>) -> Result<PlonkNode<NodeMeta<EvalValue>>, EvalError> {
     let mut env = Env::new();
     add_metadata_and_eval_internal(expr, &mut env)
 }
@@ -378,73 +378,73 @@ fn map_eval_value_to_field<F: Field>(val: &EvalValue) -> F {
 }
 
 /// Recursively convert each node's metadata from EvalValue → F.
-fn map_ast_value_to_field<F: Field>(ast: &AST<NodeMeta<EvalValue>>) -> AST<NodeMeta<F>> {
-    match ast {
-        AST::Int(x, meta) => AST::Int(
+fn map_plonk_node_value_to_field<F: Field>(plonk_node: &PlonkNode<NodeMeta<EvalValue>>) -> PlonkNode<NodeMeta<F>> {
+    match plonk_node {
+        PlonkNode::Int(x, meta) => PlonkNode::Int(
             *x,
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Bool(b, meta) => AST::Bool(
+        PlonkNode::Bool(b, meta) => PlonkNode::Bool(
             *b,
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Add(lhs, rhs, meta) => AST::Add(
-            Box::new(map_ast_value_to_field(lhs)),
-            Box::new(map_ast_value_to_field(rhs)),
+        PlonkNode::Add(lhs, rhs, meta) => PlonkNode::Add(
+            Box::new(map_plonk_node_value_to_field(lhs)),
+            Box::new(map_plonk_node_value_to_field(rhs)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Sub(lhs, rhs, meta) => AST::Sub(
-            Box::new(map_ast_value_to_field(lhs)),
-            Box::new(map_ast_value_to_field(rhs)),
+        PlonkNode::Sub(lhs, rhs, meta) => PlonkNode::Sub(
+            Box::new(map_plonk_node_value_to_field(lhs)),
+            Box::new(map_plonk_node_value_to_field(rhs)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Mult(lhs, rhs, meta) => AST::Mult(
-            Box::new(map_ast_value_to_field(lhs)),
-            Box::new(map_ast_value_to_field(rhs)),
+        PlonkNode::Mult(lhs, rhs, meta) => PlonkNode::Mult(
+            Box::new(map_plonk_node_value_to_field(lhs)),
+            Box::new(map_plonk_node_value_to_field(rhs)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Div(lhs, rhs, meta) => AST::Div(
-            Box::new(map_ast_value_to_field(lhs)),
-            Box::new(map_ast_value_to_field(rhs)),
+        PlonkNode::Div(lhs, rhs, meta) => PlonkNode::Div(
+            Box::new(map_plonk_node_value_to_field(lhs)),
+            Box::new(map_plonk_node_value_to_field(rhs)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Eq(lhs, rhs, meta) => AST::Eq(
-            Box::new(map_ast_value_to_field(lhs)),
-            Box::new(map_ast_value_to_field(rhs)),
+        PlonkNode::Eq(lhs, rhs, meta) => PlonkNode::Eq(
+            Box::new(map_plonk_node_value_to_field(lhs)),
+            Box::new(map_plonk_node_value_to_field(rhs)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::Not(sub, meta) => AST::Not(
-            Box::new(map_ast_value_to_field(sub)),
+        PlonkNode::Not(sub, meta) => PlonkNode::Not(
+            Box::new(map_plonk_node_value_to_field(sub)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
-        AST::If(cond, then_branch, else_branch, meta) => AST::If(
-            Box::new(map_ast_value_to_field(cond)),
-            Box::new(map_ast_value_to_field(then_branch)),
-            Box::new(map_ast_value_to_field(else_branch)),
+        PlonkNode::If(cond, then_branch, else_branch, meta) => PlonkNode::If(
+            Box::new(map_plonk_node_value_to_field(cond)),
+            Box::new(map_plonk_node_value_to_field(then_branch)),
+            Box::new(map_plonk_node_value_to_field(else_branch)),
             NodeMeta {
                 node_id: meta.node_id,
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
@@ -454,30 +454,30 @@ fn map_ast_value_to_field<F: Field>(ast: &AST<NodeMeta<EvalValue>>) -> AST<NodeM
 }
 
 /// The public function that:
-/// 1) Evaluates the AST (with no metadata) into AST<NodeMeta<EvalValue>>  
-/// 2) Maps that to AST<NodeMeta<F>>  
+/// 1) Evaluates the PlonkNode (with no metadata) into PlonkNode<NodeMeta<EvalValue>>  
+/// 2) Maps that to PlonkNode<NodeMeta<F>>  
 pub fn add_metadata_and_eval<F: Field>(
-    expr: &AST<()>,
-) -> Result<AST<NodeMeta<F>>, EvalError> {
-    // Step 1: Evaluate to AST<NodeMeta<EvalValue>>
+    expr: &PlonkNode<()>,
+) -> Result<PlonkNode<NodeMeta<F>>, EvalError> {
+    // Step 1: Evaluate to PlonkNode<NodeMeta<EvalValue>>
     let mut env = Env::new();
-    let eval_value_ast = add_metadata_and_eval_internal(expr, &mut env)?;
+    let eval_value_plonk_node = add_metadata_and_eval_internal(expr, &mut env)?;
 
     // Step 2: Convert EvalValue → F
-    let field_ast = map_ast_value_to_field(&eval_value_ast);
-    Ok(field_ast)
+    let field_plonk_node = map_plonk_node_value_to_field(&eval_value_plonk_node);
+    Ok(field_plonk_node)
 }
 
 fn main() {
     // Create a tiny AST<()> with no metadata:
-    let naked_ast = AST::Add(
-        Box::new(AST::Int(40, ())),
-        Box::new(AST::Int(2, ())),
+    let naked_ast = PlonkNode::Add(
+        Box::new(PlonkNode::Int(40, ())),
+        Box::new(PlonkNode::Int(2, ())),
         (),
     );
 
     // Evaluate and return an AST<NodeMeta<EvalValue>> or an evaluation error
-    match eval_ast(&naked_ast) {
+    match eval_plonk_node(&naked_ast) {
         Ok(evaluated_ast) => {
             println!("Success! Evaluated AST = {:?}", evaluated_ast);
         }

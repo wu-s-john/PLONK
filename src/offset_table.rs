@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ark_ff::Field;
-use crate::ast::ASTKind;
+use crate::plonk_circuit::PlonkNodeKind;
 use crate::execution_trace::{ExecutionTrace, WirePosition};
 
 /// A struct that holds both the offset map and total size of all tables.
@@ -10,7 +10,7 @@ use crate::execution_trace::{ExecutionTrace, WirePosition};
 #[derive(Debug, Clone)]
 pub struct OffsetTable {
     /// Maps operation kind to their starting row index
-    pub offset_map: HashMap<ASTKind, usize>,
+    pub offset_map: HashMap<PlonkNodeKind, usize>,
     /// Total number of rows across all operations
     pub total_rows: usize,
 }
@@ -48,12 +48,12 @@ impl OffsetTable {
     }
 
     /// Get the starting row offset for an operation kind
-    pub fn get_offset(&self, kind: &ASTKind) -> Option<usize> {
+    pub fn get_offset(&self, kind: &PlonkNodeKind) -> Option<usize> {
         self.offset_map.get(kind).copied()
     }
 
     /// Convert a local row index within an operation to a global row index
-    pub fn to_global_row(&self, kind: &ASTKind, local_row: usize) -> Option<usize> {
+    pub fn to_global_row(&self, kind: &PlonkNodeKind, local_row: usize) -> Option<usize> {
         self.get_offset(kind).map(|offset| offset + local_row)
     }
 
