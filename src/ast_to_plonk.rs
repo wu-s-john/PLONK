@@ -1,6 +1,11 @@
 use std::collections::HashMap;
-use crate::language_frontend::ast::{Expr, BinOp, Value};
-use crate::plonk_circuit::{PlonkNode, NodeMeta, EvalValue};
+use crate::language_frontend::ast::{Expr, BinOp};
+// Removed NodeMeta (unused). We keep EvalValue under tests if needed.
+#[cfg(test)]
+#[allow(unused_imports)]
+use crate::plonk_circuit::EvalValue;
+use crate::plonk_circuit::PlonkNode;
+
 
 #[derive(Debug)]
 pub enum ConversionError {
@@ -158,7 +163,7 @@ mod tests {
     use crate::language_frontend::{lexer::lex, parser};
     use crate::language_frontend::evaluator::eval;
     use crate::language_frontend::ast::Value;
-    use crate::plonk_circuit::{eval_plonk_node, EvalValue};
+    use crate::plonk_circuit::eval_plonk_node;
 
     fn parse_expr(input: &str) -> Box<Expr> {
         let tokens = lex(input);
@@ -172,7 +177,7 @@ mod tests {
     }
 
     // Now unsafe, and it panics on any error instead of returning a Result
-    unsafe fn test_conversion(input: &str) {
+    unsafe fn test_conversion<F: ark_ff::Field>(input: &str) {
         let ast = parse_expr(input);
 
         // Interpret with the AST-based evaluator
@@ -183,61 +188,52 @@ mod tests {
         let plonk_node = convert_to_plonk(&ast)
             .unwrap_or_else(|e| panic!("Conversion error: {:?}", e));
 
-        // Evaluate the PlonkNode
-        let evaluated_plonk = eval_plonk_node(&plonk_node)
+        // Evaluate the PlonkNode with a generic Field F
+        let evaluated_plonk = eval_plonk_node::<F>(&plonk_node)
             .unwrap_or_else(|e| panic!("PlonkNode evaluation error: {:?}", e));
 
         // Extract the evaluated value
         let plonk_value = evaluated_plonk.meta().evaluated_value.clone();
 
         // Compare results and panic on mismatch
-        match interpreter_result {
-            Value::Int(i1) => match plonk_value {
-                EvalValue::IntVal(i2) => {
-                    if i1 != i2 {
-                        panic!("Value mismatch: interpreter={}, plonk={}", i1, i2);
-                    }
-                }
-                _ => panic!("Expected integer EvalValue"),
-            },
-            Value::Bool(b1) => match plonk_value {
-                EvalValue::BoolVal(b2) => {
-                    if b1 != b2 {
-                        panic!("Value mismatch: interpreter={}, plonk={}", b1, b2);
-                    }
-                }
-                _ => panic!("Expected boolean EvalValue"),
-            },
-            Value::Closure(_, _, _) => {
-                panic!("Unexpected closure in final result");
-            }
-        }
+        // Convert interpreter result to field value for comparison
+        let field_value = match interpreter_result {
+            Value::Int(n) => F::from(n as u64),
+            Value::Bool(b) => if b { F::from(1u64) } else { F::from(0u64) },
+            _ => panic!("Unsupported value type for field conversion"),
+        };
+
+        assert_eq!(field_value, plonk_value, "PlonkNode evaluation did not match interpreter");
     }
 
+    use ark_bn254::Fr as F;
+
+
+    
     #[test]
     fn test_simple_arithmetic() {
-        unsafe { test_conversion("1 + 2 * 3"); }
-        unsafe { test_conversion("(1 + 2) * 3"); }
-        unsafe { test_conversion("1 + 2 + 3"); }
+        unsafe { test_conversion::<F>("1 + 2 * 3"); }
+        unsafe { test_conversion::<F>("(1 + 2) * 3"); }
+        unsafe { test_conversion::<F>("1 + 2 + 3"); }
     }
 
     #[test]
     fn test_let_bindings() {
-        unsafe { test_conversion("let x = 5 in x + 3"); }
-        unsafe { test_conversion("let x = 5 in let y = 3 in x + y"); }
+        unsafe { test_conversion::<F>("let x = 5 in x + 3"); }
+        unsafe { test_conversion::<F>("let x = 5 in let y = 3 in x + y"); }
     }
 
     #[test]
     fn test_function_application() {
-        unsafe { test_conversion("let f = fun x -> x + 1 in f 5"); }
-        unsafe { test_conversion("let add = fun x -> fun y -> x + y in (add 3) 4"); }
+        unsafe { test_conversion::<F>("let f = fun x -> x + 1 in f 5"); }
+        unsafe { test_conversion::<F>("let add = fun x -> fun y -> x + y in (add 3) 4"); }
     }
 
     #[test]
     fn test_boolean_operations() {
-        unsafe { test_conversion("true && false"); }
-        unsafe { test_conversion("true || false"); }
-        unsafe { test_conversion("let x = true in let y = false in x && y"); }
+        unsafe { test_conversion::<F>("true && false"); }
+        unsafe { test_conversion::<F>("true || false"); }
+        unsafe { test_conversion::<F>("let x = true in let y = false in x && y"); }
     }
 
     #[test]
@@ -249,7 +245,7 @@ mod tests {
             let composed = compose add1 mul2 in
             composed 5
         ";
-        unsafe { test_conversion(input); }
+        unsafe { test_conversion::<F>(input); }
     }
 
     #[test]
