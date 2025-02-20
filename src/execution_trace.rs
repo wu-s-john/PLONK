@@ -558,26 +558,44 @@ pub fn interpret_plonk_node_to_execution_trace_table<F: Field>(node: &PlonkNode<
 }
 
 // Updated function to take WireCellEquivalences directly
-fn build_permutation_map(wire_equivalences: &WireCellEquivalences) -> PermutationMap {
+fn build_permutation_map<F: Field>(
+    wire_equivalences: &WireCellEquivalences,
+    gate_operations: &[ExecutionRow<F, 3>],
+) -> PermutationMap {
     let mut permutation_map: PermutationMap = HashMap::new();
     
-    // For each group of equivalent wire cells
-    for (_node_id, positions) in wire_equivalences {
-        if positions.len() <= 1 {
-            continue; // Skip single-element groups
-        }
-        
-        // Convert the set to a vector for easier iteration
+    // 1. Process all equivalence groups (including single-element)
+    for positions in wire_equivalences.values() {
         let positions: Vec<_> = positions.iter().collect();
         
-        // Create a cycle: pos[0] → pos[1] → pos[2] → ... → pos[0]
+        // Create cycle even for single-element groups
         for i in 0..positions.len() {
             let from = positions[i];
             let to = positions[(i + 1) % positions.len()];
             permutation_map.insert(from.clone(), to.clone());
         }
     }
-    
+
+    // 2. Add self-mapping for all cells (including empty ones)
+    for (row_idx, row) in gate_operations.iter().enumerate() {
+        // Process all input wires (0,1,2) and output wire
+        for input_idx in 0..3 {
+            let pos = PositionCell {
+                row_idx,
+                wire_type: ColumnType::Input(input_idx),
+            };
+            permutation_map.entry(pos.clone())
+                .or_insert_with(|| pos.clone());
+        }
+
+        let output_pos = PositionCell {
+            row_idx,
+            wire_type: ColumnType::Output,
+        };
+        permutation_map.entry(output_pos.clone())
+            .or_insert_with(|| output_pos.clone());
+    }
+
     permutation_map
 }
 
@@ -680,30 +698,26 @@ fn build_execution_trace_table<F: Field>(plonk_constraints: &mut PlonkContraints
     
     // Build permutation map
     let wire_equivalences = build_permutation_groups(plonk_constraints);
-    let permutation_map = build_permutation_map(&wire_equivalences);
+    let permutation_map = build_permutation_map(&wire_equivalences, &plonk_constraints.gate_operations);
     
     // Fill in permutation values
     for (row_idx, _) in plonk_constraints.gate_operations.iter().enumerate() {
         // For each wire in the row, find its permutation target
         let current_pos = PositionCell { row_idx, wire_type: ColumnType::Input(0) };
-        if let Some(target) = permutation_map.get(&current_pos) {
-            permutation_input1[row_idx] = input1[target.row_idx];
-        }
+        let target = permutation_map.get(&current_pos).unwrap_or(&current_pos);
+        permutation_input1[row_idx] = input1[target.row_idx];
         
         let current_pos = PositionCell { row_idx, wire_type: ColumnType::Input(1) };
-        if let Some(target) = permutation_map.get(&current_pos) {
-            permutation_input2[row_idx] = input2[target.row_idx];
-        }
+        let target = permutation_map.get(&current_pos).unwrap_or(&current_pos);
+        permutation_input2[row_idx] = input2[target.row_idx];
         
         let current_pos = PositionCell { row_idx, wire_type: ColumnType::Input(2) };
-        if let Some(target) = permutation_map.get(&current_pos) {
-            permutation_input3[row_idx] = input3[target.row_idx];
-        }
+        let target = permutation_map.get(&current_pos).unwrap_or(&current_pos);
+        permutation_input3[row_idx] = input3[target.row_idx];
         
         let current_pos = PositionCell { row_idx, wire_type: ColumnType::Output };
-        if let Some(target) = permutation_map.get(&current_pos) {
-            permutation_output[row_idx] = output[target.row_idx];
-        }
+        let target = permutation_map.get(&current_pos).unwrap_or(&current_pos);
+        permutation_output[row_idx] = output[target.row_idx];
     }
     
     ExecutionTraceTable {
