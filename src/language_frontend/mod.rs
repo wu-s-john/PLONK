@@ -87,8 +87,6 @@ mod tests {
             .parse(token_triples.into_iter())
             .unwrap();
         
-        println!("Nested Functions AST: {:?}", ast);
-        
         let result = parse_and_eval(input).unwrap();
         assert!(matches!(result, Value::Int(7)));
     }
@@ -105,8 +103,6 @@ mod tests {
         let ast = parser::ExprParser::new()
             .parse(token_triples.into_iter())
             .unwrap();
-        
-        println!("Boolean Operations AST: {:?}", ast);
         
         let result = parse_and_eval(input).unwrap();
         assert!(matches!(result, Value::Bool(true)));
@@ -130,8 +126,6 @@ mod tests {
         let ast = parser::ExprParser::new()
             .parse(token_triples.into_iter())
             .unwrap();
-        
-        println!("Complex Expression AST: {:?}", ast);
         
         let result = parse_and_eval(input).unwrap();
         assert!(matches!(result, Value::Int(11))); // (5 * 2) + 1 = 11

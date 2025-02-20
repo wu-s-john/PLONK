@@ -8,6 +8,8 @@ mod offset_table;
 mod permutation_polynomial;
 mod polynomial_utils;
 mod language_frontend;
+mod ast_to_plonk;
+mod union_find;
 
 #[derive(Debug)]
 enum InterpreterError {

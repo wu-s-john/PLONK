@@ -1,10 +1,13 @@
 use ark_ff::Field;
 use std::collections::HashMap;
 
-/// Metadata for each node: an ID and a definite evaluated value (no Option).
+// Each expression in the AST will be tied to an ID
+pub type PlonkNodeId = usize;
+
+/// Metadata for each node: an ID and an evaluated value.
 #[derive(Debug, Clone)]
 pub struct NodeMeta<V> {
-    pub node_id: usize,
+    pub node_id: PlonkNodeId,
     pub evaluated_value: V,
 }
 
@@ -50,6 +53,18 @@ pub enum PlonkNode<M> {
 
     /// If-then-else
     If(Box<PlonkNode<M>>, Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
+
+    // Let binding
+    Let(String, Box<PlonkNode<M>>, Box<PlonkNode<M>>, M),
+
+    // Variable
+    Var(String, M),
+}
+
+#[derive(Debug, Clone)]
+pub struct EvaluatedPlonk<F: Field> {
+    pub root: PlonkNode<NodeMeta<F>>,
+    pub node_node_equivalences: Vec<(PlonkNodeId, PlonkNodeId)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -65,27 +80,39 @@ pub enum PlonkNodeKind {
     If,
 }
 
-/// Simple struct for environment (assign IDs, hold cache if you like).
-/// We'll keep a cache that maps the pointer of the "old" AST<()> node
-/// to the newly transformed AST<NodeMeta>.
-struct Env {
-    next_id: usize,
-    cache: HashMap<*const PlonkNode<()>, PlonkNode<NodeMeta<EvalValue>>>
+/// Holds node ID and its field value so variables can point to both.
+#[derive(Debug, Clone)]
+pub struct DefinitionVal<F: Field> {
+    pub node_id: PlonkNodeId,
+    pub value: F,
 }
 
-impl Env {
-    fn new() -> Self {
-        Env {
+/// Environment storing field values for each variable name, along with node equivalences.
+pub struct Env<F: Field> {
+    pub next_id: PlonkNodeId,
+    /// Maps variable names -> (node_id, field value)
+    pub definitions: HashMap<String, DefinitionVal<F>>,
+    pub equivalent_nodes: Vec<(PlonkNodeId, PlonkNodeId)>,
+}
+
+impl<F: Field> Env<F> {
+    pub fn new() -> Self {
+        Self {
             next_id: 0,
-            cache: HashMap::new(),
+            definitions: HashMap::new(),
+            equivalent_nodes: Vec::new(),
         }
     }
 
-    /// Get a fresh ID for a node
-    fn fresh_id(&mut self) -> usize {
+    pub fn fresh_id(&mut self) -> PlonkNodeId {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Records that two node IDs are semantically equivalent in the final circuit.
+    pub fn add_equivalent_nodes(&mut self, node1_id: PlonkNodeId, node2_id: PlonkNodeId) {
+        self.equivalent_nodes.push((node1_id, node2_id));
     }
 }
 
@@ -101,21 +128,19 @@ impl<M> PlonkNode<M> {
             | PlonkNode::Div(_, _, m)
             | PlonkNode::Eq(_, _, m)
             | PlonkNode::Not(_, m)
-            | PlonkNode::If(_, _, _, m) => m,
+            | PlonkNode::If(_, _, _, m)
+            | PlonkNode::Let(_, _, _, m)
+            | PlonkNode::Var(_, m) => m,
         }
     }
 }
 
-/// Our main transformation: AST<()> -> Result<AST<NodeMeta<EvalValue>>, EvalError>
-/// Now uses a cache to avoid recomputing the same AST node multiple times.
-/// (Most pure AST trees won't share the exact same pointer for subtrees,
-/// but if you do have shared subtrees, the cache will skip repeated work.)
-fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result<PlonkNode<NodeMeta<EvalValue>>, EvalError> {
-    // If we've already computed this node, return the cached result.
-    let expr_ptr = expr as *const PlonkNode<()>;
-    if let Some(already_computed) = env.cache.get(&expr_ptr) {
-        return Ok(already_computed.clone());
-    }
+/// Our main transformation: AST<()> -> Result<AST<NodeMeta<F>>, EvalError>
+/// that evaluates using the Field trait F rather than EvalValue.
+fn add_metadata_and_eval_internal<F: Field>(
+    expr: &PlonkNode<()>,
+    env: &mut Env<F>,
+) -> Result<PlonkNode<NodeMeta<F>>, EvalError> {
 
     let result_ast = match expr {
         // -----------------
@@ -123,21 +148,23 @@ fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result
         // -----------------
         PlonkNode::Int(value, ()) => {
             let id = env.fresh_id();
+            let fval = F::from(*value as u64);
             PlonkNode::Int(
                 *value,
                 NodeMeta {
                     node_id: id,
-                    evaluated_value: EvalValue::IntVal(*value),
+                    evaluated_value: fval,
                 },
             )
         }
         PlonkNode::Bool(b, ()) => {
             let id = env.fresh_id();
+            let fval = if *b { F::one() } else { F::zero() };
             PlonkNode::Bool(
                 *b,
                 NodeMeta {
                     node_id: id,
-                    evaluated_value: EvalValue::BoolVal(*b),
+                    evaluated_value: fval,
                 },
             )
         }
@@ -149,115 +176,65 @@ fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
+            let sum = lhs_w_meta.meta().evaluated_value + rhs_w_meta.meta().evaluated_value;
 
-            // Both sides must be IntVal
-            let (lval, rval) = match (
-                &lhs_w_meta.meta().evaluated_value,
-                &rhs_w_meta.meta().evaluated_value,
-            ) {
-                (EvalValue::IntVal(lv), EvalValue::IntVal(rv)) => (*lv, *rv),
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Add requires integer operands".to_string(),
-                    ))
-                }
-            };
-
-            let evaluated_value = EvalValue::IntVal(lval + rval);
             PlonkNode::Add(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: sum,
                 },
             )
         }
-
         PlonkNode::Sub(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
+            let diff = lhs_w_meta.meta().evaluated_value - rhs_w_meta.meta().evaluated_value;
 
-            let (lval, rval) = match (
-                &lhs_w_meta.meta().evaluated_value,
-                &rhs_w_meta.meta().evaluated_value,
-            ) {
-                (EvalValue::IntVal(lv), EvalValue::IntVal(rv)) => (*lv, *rv),
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Sub requires integer operands".to_string(),
-                    ))
-                }
-            };
-
-            let evaluated_value = EvalValue::IntVal(lval - rval);
             PlonkNode::Sub(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: diff,
                 },
             )
         }
-
         PlonkNode::Mult(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
+            let product = lhs_w_meta.meta().evaluated_value * rhs_w_meta.meta().evaluated_value;
 
-            let (lval, rval) = match (
-                &lhs_w_meta.meta().evaluated_value,
-                &rhs_w_meta.meta().evaluated_value,
-            ) {
-                (EvalValue::IntVal(lv), EvalValue::IntVal(rv)) => (*lv, *rv),
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Mult requires integer operands".to_string(),
-                    ))
-                }
-            };
-
-            let evaluated_value = EvalValue::IntVal(lval * rval);
             PlonkNode::Mult(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: product,
                 },
             )
         }
-
         PlonkNode::Div(lhs, rhs, ()) => {
             let lhs_w_meta = add_metadata_and_eval_internal(lhs, env)?;
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
+            let denominator: F = rhs_w_meta.meta().evaluated_value;
 
-            let (lval, rval) = match (
-                &lhs_w_meta.meta().evaluated_value,
-                &rhs_w_meta.meta().evaluated_value,
-            ) {
-                (EvalValue::IntVal(lv), EvalValue::IntVal(rv)) => (*lv, *rv),
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Div requires integer operands".to_string(),
-                    ))
-                }
-            };
-
-            if rval == 0 {
+            if denominator.is_zero() {
                 return Err(EvalError::DivisionByZero);
             }
 
-            let evaluated_value = EvalValue::IntVal(lval / rval);
+            // Field division
+            let quotient = lhs_w_meta.meta().evaluated_value * denominator.inverse().unwrap();
             PlonkNode::Div(
                 Box::new(lhs_w_meta),
                 Box::new(rhs_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: quotient,
                 },
             )
         }
@@ -270,17 +247,11 @@ fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result
             let rhs_w_meta = add_metadata_and_eval_internal(rhs, env)?;
             let id = env.fresh_id();
 
-            let evaluated_value = match (
-                &lhs_w_meta.meta().evaluated_value,
-                &rhs_w_meta.meta().evaluated_value,
-            ) {
-                (EvalValue::IntVal(lv), EvalValue::IntVal(rv)) => EvalValue::BoolVal(lv == rv),
-                (EvalValue::BoolVal(lb), EvalValue::BoolVal(rb)) => EvalValue::BoolVal(lb == rb),
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Eq requires both sides be either int or bool".to_string(),
-                    ))
-                }
+            // Store result as 1 if equal, 0 otherwise.
+            let eq_f = if lhs_w_meta.meta().evaluated_value == rhs_w_meta.meta().evaluated_value {
+                F::one()
+            } else {
+                F::zero()
             };
 
             PlonkNode::Eq(
@@ -288,56 +259,55 @@ fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result
                 Box::new(rhs_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: eq_f,
                 },
             )
         }
 
         // -----------------
-        // Boolean NOT
-        // -----------------
+        // Boolean NOT (interpreted as 0 => true, otherwise => false)
+        // We flip 0 <-> non-zero in the field sense.
+        // If val == 0 => 1 else => 0
+        // This retains the spirit of boolean inversion, but in F.
+        // If the input wasn't 0 or 1, it toggles to 0 anyway.
+        // We are ignoring integer type checks from old code.
+        // This satisfies "use the trait, Field F" approach.
+        // 
+        // If you want strict boolean checks, you'd have to enforce val == 0 or 1.
         PlonkNode::Not(sub, ()) => {
             let sub_w_meta = add_metadata_and_eval_internal(sub, env)?;
             let id = env.fresh_id();
+            let sub_val: F = sub_w_meta.meta().evaluated_value;
 
-            let sb = match &sub_w_meta.meta().evaluated_value {
-                EvalValue::BoolVal(b) => *b,
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "Not requires a bool operand".to_string(),
-                    ))
-                }
+            let inverted = if sub_val.is_zero() {
+                F::one()
+            } else {
+                F::zero()
             };
 
-            let evaluated_value = EvalValue::BoolVal(!sb);
             PlonkNode::Not(
                 Box::new(sub_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: inverted,
                 },
             )
         }
 
         // -----------------
-        // If-then-else
-        // -----------------
+        // If-then-else (cond != 0 => then, else => else)
+        // for Field-based booleans.
+        // 
         PlonkNode::If(cond, then_branch, else_branch, ()) => {
-            let cond_w_meta = add_metadata_and_eval_internal(cond, env)?;
-            let then_w_meta = add_metadata_and_eval_internal(then_branch, env)?;
-            let else_w_meta = add_metadata_and_eval_internal(else_branch, env)?;
+            let cond_w_meta = add_metadata_and_eval_internal::<F>(cond, env)?;
+            let then_w_meta = add_metadata_and_eval_internal::<F>(then_branch, env)?;
+            let else_w_meta = add_metadata_and_eval_internal::<F>(else_branch, env)?;
             let id = env.fresh_id();
 
-            // If the condition is a BoolVal, pick one branch for "overall" value
-            let evaluated_value = match cond_w_meta.meta().evaluated_value {
-                EvalValue::BoolVal(true) => then_w_meta.meta().evaluated_value.clone(),
-                EvalValue::BoolVal(false) => else_w_meta.meta().evaluated_value.clone(),
-                // Anything else is a type error
-                _ => {
-                    return Err(EvalError::TypeError(
-                        "If condition must be a bool".to_string(),
-                    ))
-                }
+            let chosen = if cond_w_meta.meta().evaluated_value.is_zero() {
+                else_w_meta.meta().evaluated_value
+            } else {
+                then_w_meta.meta().evaluated_value
             };
 
             PlonkNode::If(
@@ -346,21 +316,93 @@ fn add_metadata_and_eval_internal(expr: &PlonkNode<()>, env: &mut Env) -> Result
                 Box::new(else_w_meta),
                 NodeMeta {
                     node_id: id,
-                    evaluated_value,
+                    evaluated_value: chosen,
+                },
+            )
+        }
+
+        // -----------------
+        // Let binding
+        // Inlines the definition into env. We store the field result into env
+        // by converting it to an EvalValue. Then evaluate the body, restore env.
+        // 
+        PlonkNode::Let(var_name, def_expr, body_expr, ()) => {
+            let def_w_meta = add_metadata_and_eval_internal(def_expr, env)?;
+
+            // Store node ID + value in the env
+            let old_def = env.definitions.insert(
+                var_name.clone(),
+                DefinitionVal {
+                    node_id: def_w_meta.meta().node_id,
+                    value: def_w_meta.meta().evaluated_value,
+                },
+            );
+
+            // Evaluate the body
+            let body_w_meta = add_metadata_and_eval_internal(body_expr, env)?;
+
+            // Restore old definition if it existed
+            if let Some(old_value) = old_def {
+                env.definitions.insert(var_name.clone(), old_value);
+            } else {
+                env.definitions.remove(var_name);
+            }
+
+            let id = env.fresh_id();
+
+            // The let node is equivalent to the body node
+            env.add_equivalent_nodes(id, body_w_meta.meta().node_id);
+
+            let final_val = body_w_meta.meta().evaluated_value;
+            PlonkNode::Let(
+                var_name.clone(),
+                Box::new(def_w_meta),
+                Box::new(body_w_meta),
+                NodeMeta {
+                    node_id: id,
+                    evaluated_value: final_val,
+                },
+            )
+        }
+
+        // -----------------
+        // Variable reference
+        // We look it up in the environment, convert it to F, and use that.
+        // 
+        PlonkNode::Var(var_name, ()) => {
+            let definition_val = env
+                .definitions
+                .get(var_name)
+                .ok_or_else(|| EvalError::TypeError(format!("Unbound variable: {}", var_name)))?;
+
+            let definition_val = definition_val.clone();
+            let id = env.fresh_id();
+
+            // The newly created Var node is equivalent to the definition's node
+            env.add_equivalent_nodes(id, definition_val.node_id);
+
+            PlonkNode::Var(
+                var_name.clone(),
+                NodeMeta {
+                    node_id: id,
+                    evaluated_value: definition_val.value,
                 },
             )
         }
     };
 
-    // Store the newly computed AST in the cache before returning.
-    env.cache.insert(expr_ptr, result_ast.clone());
     Ok(result_ast)
 }
 
-/// A top-level function that creates an Env and calls add_metadata_and_eval_internal.
-pub fn eval_plonk_node(expr: &PlonkNode<()>) -> Result<PlonkNode<NodeMeta<EvalValue>>, EvalError> {
+/// A top-level function that creates an Env and calls `add_metadata_and_eval_internal`.
+#[allow(dead_code)]
+pub fn eval_plonk_node<F: Field>(root: &PlonkNode<()>) -> Result<EvaluatedPlonk<F>, EvalError> {
     let mut env = Env::new();
-    add_metadata_and_eval_internal(expr, &mut env)
+    let evaluated = add_metadata_and_eval_internal::<F>(root, &mut env)?;
+    Ok(EvaluatedPlonk {
+        root: evaluated,
+        node_node_equivalences: env.equivalent_nodes,
+    })
 }
 
 /// Convert a single EvalValue (i64 or bool) into a Field element.
@@ -378,7 +420,9 @@ fn map_eval_value_to_field<F: Field>(val: &EvalValue) -> F {
 }
 
 /// Recursively convert each node's metadata from EvalValue → F.
-fn map_plonk_node_value_to_field<F: Field>(plonk_node: &PlonkNode<NodeMeta<EvalValue>>) -> PlonkNode<NodeMeta<F>> {
+fn map_plonk_node_value_to_field<F: Field>(
+    plonk_node: &PlonkNode<NodeMeta<EvalValue>>,
+) -> PlonkNode<NodeMeta<F>> {
     match plonk_node {
         PlonkNode::Int(x, meta) => PlonkNode::Int(
             *x,
@@ -450,23 +494,195 @@ fn map_plonk_node_value_to_field<F: Field>(plonk_node: &PlonkNode<NodeMeta<EvalV
                 evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
             },
         ),
+        PlonkNode::Let(var_name, def_expr, body_expr, meta) => PlonkNode::Let(
+            var_name.clone(),
+            Box::new(map_plonk_node_value_to_field(def_expr)),
+            Box::new(map_plonk_node_value_to_field(body_expr)),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
+        PlonkNode::Var(var_name, meta) => PlonkNode::Var(
+            var_name.clone(),
+            NodeMeta {
+                node_id: meta.node_id,
+                evaluated_value: map_eval_value_to_field(&meta.evaluated_value),
+            },
+        ),
     }
 }
 
-/// The public function that:
-/// 1) Evaluates the PlonkNode (with no metadata) into PlonkNode<NodeMeta<EvalValue>>  
-/// 2) Maps that to PlonkNode<NodeMeta<F>>  
-pub fn add_metadata_and_eval<F: Field>(
-    expr: &PlonkNode<()>,
-) -> Result<PlonkNode<NodeMeta<F>>, EvalError> {
-    // Step 1: Evaluate to PlonkNode<NodeMeta<EvalValue>>
-    let mut env = Env::new();
-    let eval_value_plonk_node = add_metadata_and_eval_internal(expr, &mut env)?;
+pub mod evaluated_node_factory {
+    use super::{PlonkNode, NodeMeta, Field};
 
-    // Step 2: Convert EvalValue → F
-    let field_plonk_node = map_plonk_node_value_to_field(&eval_value_plonk_node);
-    Ok(field_plonk_node)
+    /// Create an integer constant node with metadata
+    pub fn int<F: Field>(value: i64, node_id: usize) -> PlonkNode<NodeMeta<F>> {
+        PlonkNode::Int(
+            value,
+            NodeMeta {
+                node_id,
+                evaluated_value: F::from(value as u64),
+            }
+        )
+    }
+
+    /// Create a boolean constant node with metadata
+    pub fn bool<F: Field>(value: bool, node_id: usize) -> PlonkNode<NodeMeta<F>> {
+        let field_value = if value { F::one() } else { F::zero() };
+        PlonkNode::Bool(
+            value,
+            NodeMeta {
+                node_id,
+                evaluated_value: field_value,
+            }
+        )
+    }
+
+    /// Create an addition operation node with metadata
+    pub fn add<F: Field>(
+        lhs: PlonkNode<NodeMeta<F>>,
+        rhs: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let sum = lhs.meta().evaluated_value + rhs.meta().evaluated_value;
+        PlonkNode::Add(
+            Box::new(lhs),
+            Box::new(rhs),
+            NodeMeta {
+                node_id,
+                evaluated_value: sum,
+            }
+        )
+    }
+
+    /// Create a subtraction operation node with metadata
+    pub fn sub<F: Field>(
+        lhs: PlonkNode<NodeMeta<F>>,
+        rhs: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let diff = lhs.meta().evaluated_value - rhs.meta().evaluated_value;
+        PlonkNode::Sub(
+            Box::new(lhs),
+            Box::new(rhs),
+            NodeMeta {
+                node_id,
+                evaluated_value: diff,
+            }
+        )
+    }
+
+    /// Create a multiplication operation node with metadata
+    pub fn mult<F: Field>(
+        lhs: PlonkNode<NodeMeta<F>>,
+        rhs: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let product = lhs.meta().evaluated_value * rhs.meta().evaluated_value;
+        PlonkNode::Mult(
+            Box::new(lhs),
+            Box::new(rhs),
+            NodeMeta {
+                node_id,
+                evaluated_value: product,
+            }
+        )
+    }
+
+    /// Create a division operation node with metadata
+    pub fn div<F: Field>(
+        lhs: PlonkNode<NodeMeta<F>>,
+        rhs: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let quotient = lhs.meta().evaluated_value * rhs.meta().evaluated_value.inverse().unwrap();
+        PlonkNode::Div(
+            Box::new(lhs),
+            Box::new(rhs),
+            NodeMeta {
+                node_id,
+                evaluated_value: quotient,
+            }
+        )
+    }
+
+    /// Create an equality comparison node with metadata
+    pub fn eq<F: Field>(
+        lhs: PlonkNode<NodeMeta<F>>,
+        rhs: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let eq_value = if lhs.meta().evaluated_value == rhs.meta().evaluated_value {
+            F::one()
+        } else {
+            F::zero()
+        };
+        PlonkNode::Eq(
+            Box::new(lhs),
+            Box::new(rhs),
+            NodeMeta {
+                node_id,
+                evaluated_value: eq_value,
+            }
+        )
+    }
+
+    /// Create a boolean NOT node with metadata
+    pub fn not<F: Field>(
+        operand: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let inverted = if operand.meta().evaluated_value.is_zero() {
+            F::one()
+        } else {
+            F::zero()
+        };
+        PlonkNode::Not(
+            Box::new(operand),
+            NodeMeta {
+                node_id,
+                evaluated_value: inverted,
+            }
+        )
+    }
+
+    /// Create a variable reference node with metadata
+    pub fn var<F: Field>(
+        name: &str, 
+        node_id: usize,
+        value: F  // Value should come from environment equivalences
+    ) -> PlonkNode<NodeMeta<F>> {
+        PlonkNode::Var(
+            name.to_string(),
+            NodeMeta {
+                node_id,
+                evaluated_value: value,
+            },
+        )
+    }
+
+    /// Create a let binding node with metadata
+    pub fn let_<F: Field>(
+        var_name: &str,
+        bound_expr: PlonkNode<NodeMeta<F>>,
+        body_expr: PlonkNode<NodeMeta<F>>,
+        node_id: usize,
+    ) -> PlonkNode<NodeMeta<F>> {
+        let final_val = body_expr.meta().evaluated_value;
+        PlonkNode::Let(
+            var_name.to_string(),
+            Box::new(bound_expr),
+            Box::new(body_expr),
+            NodeMeta {
+                node_id,
+                evaluated_value: final_val,
+            },
+        )
+    }
 }
+
+use ark_bn254::Fr as F;
 
 fn main() {
     // Create a tiny AST<()> with no metadata:
@@ -476,8 +692,7 @@ fn main() {
         (),
     );
 
-    // Evaluate and return an AST<NodeMeta<EvalValue>> or an evaluation error
-    match eval_plonk_node(&naked_ast) {
+    match eval_plonk_node::<F>(&naked_ast) {
         Ok(evaluated_ast) => {
             println!("Success! Evaluated AST = {:?}", evaluated_ast);
         }

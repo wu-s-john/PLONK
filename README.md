@@ -22,28 +22,44 @@ This project is a compiler for the PLONK proof system. It takes a lambda-based c
     - [ ] Implement blinding of the wire polynomials
 
 
+- We have to organize the code better
+
 
 
 ## Building the Prover process of Plonk
 ### Setup
 Compute SRS Strings {g, g^s, g^s^2, ..., g^s^n}
-
+- Setup execution trace table:
+  - This includes the rows of each operation in the table
+  - This also includes the equality constraint of each variable
 - Setup Selector polynomial `s(X)`  via FFTs
-  - Tests
-    - Given that we have the original AST, we need to make sure that the node for the selector polynomial is correct
+  - We need to 2 the execution trace from the lambda calculus circuit and then we construct the selector polynomial from the operation in each row of the execution trace
+  - **How to test**
+    - Given that we have the execution trace, we need to make sure that the node for the selector polynomial is correct
 - Setup permutation polynomial `𝜎_𝑖(𝑋)`  via FFTs
-  - Tests
+  - **How to test**
     - We have a cycle for just two points and make sure that the cycle is correct
     - We have a cycle for 3 points and make sure that the cycle is correct
     - We have a cycle for 4 points and make sure that the cycle is correct
     - If there is an input that is not connected, then we need it's just it's own cycle
     - The permutation polynomial is bijective to the identity permutation
-- Compute the KZG commitment of the selector polynomial`s(X)`
+    - For a sample plonk circuit, can we test that the permutation polynomial is correct?
+- Compute the KZG commitment of the selector polynomial `s(X)`
+
+
+- So, we can just have one giant execution table that includes what operation was executed for each row
+- Then, we can have each expression be tied to a expression id and then connect them together. 
+- Each expression and variable is tied to a node id.
+    - Whenever you use the expression or variable, you reference the node id
+    - expression ids can be tied to each other as well. 
+    - You can cell ids be equivalent to expression ids. Then, we want to make equivalent groupings of each cell and expression ids.
+
+
 
 ## The Actual Proving Process
 - Derive the wire polynomials `w(X)`
   - Tests
-    - Given that we have the original AST, we need to make sure that the node for the wire polynomials is correct. Like the operations would equal to the wire polynomials
+    - Given that we have the execution trace, we need to make sure that the node for the wire polynomials is correct. Like the operations would equal to the wire polynomials
 - Produce the grand product polynomial `Z(𝑋)` via FFTs
   - First sample permutation challenges (β, γ) from verifier
   - Then compute the grand product polynomial `Z(𝑋)`
@@ -59,18 +75,20 @@ Compute SRS Strings {g, g^s, g^s^2, ..., g^s^n}
 - Produce the aggregation polynomial `agg(𝑋)`  
   - Sample α which will be used to combine the constraint polynomials
   - Compute wire constraint polynomial
-     - Tests
+     - **How to test**
         - For each row, ensure that the wire constraint polynomial equals to zero
   - Compute permutation constraint polynomial
         - For each row, ensure that the permutation constraint polynomial equals to zero
-- Compute the polynomial quotient polynomial `q(t)` where you divide on the vanishing polynomial `Z_H(X)` and then compute
-   - Make sure that agg(r) = q(r)(r^n - 1) for any random r in the field
+- Compute the polynomial quotient polynomial `q(t)` where you divide on the vanishing polynomial `Z_H(X)`
+- **How to test**
+  - It would be good to test that the quotient polynomial is correct by checking that the quotient polynomial multiplied by the vanishing polynomial equals to the grand product polynomial evaluating the polynomial at a random point
 - Split the quotient polynomial into 4 polynomials
 - Compute the KZG commitments of the 4 polynomials
   - [t_0(X)]1
   - [t_1(X)]1
   - [t_2(X)]1
   - [t_3(X)]1
+
 
 - Now do opening challenges for the polynomials, w(x), s(x), z(x)
   - Verifer samples challenges for the base polynomials, ε
