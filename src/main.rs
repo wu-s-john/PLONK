@@ -4,8 +4,7 @@ use crate::language_frontend::parser;
 
 mod plonk_circuit;
 mod execution_trace;
-mod offset_table;
-mod permutation_polynomial;
+mod grand_product;
 mod polynomial_utils;
 mod language_frontend;
 mod ast_to_plonk;

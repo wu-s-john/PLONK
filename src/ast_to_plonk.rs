@@ -225,7 +225,7 @@ fn substitute(
 
 /// Once the expression no longer has any Lam or App,
 /// we convert it to a PlonkNode<()>.
-fn expr_to_plonk(expr: &Expr, _env: &InlineEnv) -> PlonkNode<()> {
+pub fn expr_to_plonk(expr: &Expr, _env: &InlineEnv) -> PlonkNode<()> {
     match expr {
         Expr::Int(n) => PlonkNode::Int(*n, ()),
         Expr::Bool(b) => PlonkNode::Bool(*b, ()),
