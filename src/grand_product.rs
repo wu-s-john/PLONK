@@ -1,13 +1,13 @@
 use ark_ff::Field;
-
-use crate::execution_trace::ExecutionTraceTable;
+use ark_std::test_rng;
+use crate::{execution_trace::ExecutionTraceTable, position_cell::{position_to_id, ColumnType, PositionCell}};
 
 /// Builds the grand product polynomial Z.  
 /// Z has length n+1 (where n is the number of rows in the evaluation table),  
 /// with Z[0] = 1 and then for j in [0..n-1]:
 ///     Z[j+1] = Z[j]
-///             * Π(i=0..m-1) [ vᵢ(j) + β * vᵢ(σᵢ(j)) + γ ]
-///             / Π(i=0..m-1) [ vᵢ(j) + β * δᵢ(j) + γ ]
+///             * Π(i=0..m-1) [ vᵢ(j) + β * δᵢ(j) + γ ]
+///             / Π(i=0..m-1) [ vᵢ(j) + β * vᵢ(σᵢ(j)) + γ ]
 ///
 /// Here:
 ///   • vᵢ(j) is the i-th wire value at row j,
@@ -15,48 +15,69 @@ use crate::execution_trace::ExecutionTraceTable;
 ///   • δᵢ(j) is a placeholder for the shift (or domain factor) in a real Plonk system.
 ///     For simplicity, we just use j (the row index) or some other scheme below.
 ///
-#[allow(dead_code)]
 pub fn build_grand_product_evaluation_vector<F: Field>(
     evaluation_table: &ExecutionTraceTable<F>,
-    beta: F,
-    gamma: F,
+    random1_opt: Option<F>,
+    random2_opt: Option<F>,
 ) -> Vec<F> {
-    let n = evaluation_table.input1.len();
-    let mut z = vec![F::one(); n + 1];
+    let num_rows = evaluation_table.input1.len();
+    let mut z = vec![F::one(); num_rows + 1];
+
+    // Generate random values if not provided
+    let random1 = random1_opt.unwrap_or_else(|| F::rand(&mut test_rng()));
+    let random2 = random2_opt.unwrap_or_else(|| F::rand(&mut test_rng()));
 
     // For each row j, compute the ratio of products
-    for j in 1..n {
+    for row in 0..num_rows {
         // Collect wire values at row j
-        let v1_j = evaluation_table.input1[j];
-        let v2_j = evaluation_table.input2[j];
-        let v3_j = evaluation_table.input3[j];
-        let vo_j = evaluation_table.output[j];
+        let v1_j = evaluation_table.input1[row];
+        let v2_j = evaluation_table.input2[row];
+        let v3_j = evaluation_table.input3[row];
+        let vo_j = evaluation_table.output[row];
 
         // Collect wire values at row sigmaᵢ(j)
-        let v1_sigma = evaluation_table.permutation_input1[j];
-        let v2_sigma = evaluation_table.permutation_input2[j];
-        let v3_sigma = evaluation_table.permutation_input3[j];
-        let vo_sigma = evaluation_table.permutation_output[j];
+        let v1_sigma = evaluation_table.permutation_input1[row];
+        let v2_sigma = evaluation_table.permutation_input2[row];
+        let v3_sigma = evaluation_table.permutation_input3[row];
+        let vo_sigma = evaluation_table.permutation_output[row];
 
-        // Numerator = Π over each wire i of [ vᵢ(j) + β * vᵢ(σᵢ(j)) + γ ]
-        let mut numerator = F::one();
-        numerator *= v1_j + (beta * v1_sigma) + gamma;
-        numerator *= v2_j + (beta * v2_sigma) + gamma;
-        numerator *= v3_j + (beta * v3_sigma) + gamma;
-        numerator *= vo_j + (beta * vo_sigma) + gamma;
-
-        // Denominator = Π over each wire i of [ vᵢ(j) + β * δᵢ(j) + γ ]
-        // For simplicity, we use j as part of δᵢ(j) (you could refine this if needed).
-        let j_as_field = F::from(j as u64);
+        // Denominator = Π over each wire i of [ vᵢ(j) + β * vᵢ(σᵢ(j)) + γ ]
         let mut denominator = F::one();
-        denominator *= v1_j + (beta * j_as_field) + gamma;
-        denominator *= v2_j + (beta * j_as_field) + gamma;
-        denominator *= v3_j + (beta * j_as_field) + gamma;
-        denominator *= vo_j + (beta * j_as_field) + gamma;
+        denominator *= v1_j + (random1 * v1_sigma) + random2;
+        denominator *= v2_j + (random1 * v2_sigma) + random2;
+        denominator *= v3_j + (random1 * v3_sigma) + random2;
+        denominator *= vo_j + (random1 * vo_sigma) + random2;
+
+        // Numerator = Π over each wire i of [ vᵢ(j) + β * δᵢ(j) + γ ]
+        let mut numerator = F::one();
+        let wire_types = [
+            ColumnType::Input(0),
+            ColumnType::Input(1),
+            ColumnType::Input(2),
+            ColumnType::Output,
+        ];
+
+        for wire_type in wire_types {
+            let pos = PositionCell {
+                row_idx: row,
+                wire_type: wire_type.clone(),
+            };
+            let input_id = position_to_id(&pos);
+            let input_field = F::from(input_id as u64);
+            
+            let v_i_j = match wire_type {
+                ColumnType::Input(0) => v1_j,
+                ColumnType::Input(1) => v2_j,
+                ColumnType::Input(2) => v3_j,
+                ColumnType::Output => vo_j,
+                _ => unreachable!(),
+            };
+
+            numerator *= v_i_j + (random1 * input_field) + random2;
+        }
 
         // Update Z[j+1] = Z[j] * (numerator / denominator)
-        // (We assume denominator != 0 in typical Plonk usage.)
-        z[j] = z[j - 1] * numerator * denominator.inverse().expect(
+        z[row + 1] = z[row] * numerator * denominator.inverse().expect(
             "Denominator must be non-zero in valid PLONK circuits. \
              This indicates either bad circuit construction or \
              invalid challenge parameters beta/gamma"
@@ -89,15 +110,13 @@ mod tests {
         // Build constraints from PlonkNode
         let trace_table = interpret_plonk_node_to_execution_trace_table(
             &evaluated_plonk.root,
-            evaluated_plonk.node_node_equivalences.clone()
+            &evaluated_plonk.node_node_equivalences
         );
-
-        // Build execution trace table
 
         // Test grand product construction
         let beta = F::rand(&mut test_rng());
         let gamma = F::rand(&mut test_rng());
-        let z = build_grand_product_evaluation_vector(&trace_table, beta, gamma);
+        let z = build_grand_product_evaluation_vector(&trace_table, Some(beta), Some(gamma));
         
         assert_eq!(
             *z.last().unwrap(),

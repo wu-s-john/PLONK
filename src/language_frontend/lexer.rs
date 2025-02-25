@@ -12,6 +12,15 @@ pub enum Token {
     #[token("fun")]
     Fun,
     
+    #[token("if")]
+    If,
+    
+    #[token("then")]
+    Then,
+    
+    #[token("else")]
+    Else,
+    
     // Literals
     #[regex("[0-9]+", |lex| lex.slice().parse())]
     Int(i64),
@@ -40,6 +49,9 @@ pub enum Token {
     
     #[token("=")]
     Equals,
+    
+    #[token("==")]
+    Eq,
     
     #[token("->")]
     Arrow,

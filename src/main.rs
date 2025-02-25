@@ -5,10 +5,17 @@ use crate::language_frontend::parser;
 mod plonk_circuit;
 mod execution_trace;
 mod grand_product;
+mod polynomial_builder;
 mod polynomial_utils;
 mod language_frontend;
 mod ast_to_plonk;
 mod union_find;
+mod position_cell;
+
+pub use polynomial_builder::build_gate_constraint_polynomial;
+pub use polynomial_builder::build_permutation_constraint_polynomial;
+pub use plonk_circuit::eval_plonk_node;
+pub use ast_to_plonk::convert_to_plonk;
 
 #[derive(Debug)]
 enum InterpreterError {

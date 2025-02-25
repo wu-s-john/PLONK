@@ -1,3 +1,5 @@
+use crate::{ast_to_plonk::convert_to_plonk, language_frontend::parse_expr};
+use ark_bn254::Fr as F;
 use ark_ff::Field;
 use std::collections::HashMap;
 
@@ -78,6 +80,7 @@ pub enum PlonkNodeKind {
     Eq,
     Not,
     If,
+    Let,
 }
 
 /// Holds node ID and its field value so variables can point to both.
@@ -141,7 +144,6 @@ fn add_metadata_and_eval_internal<F: Field>(
     expr: &PlonkNode<()>,
     env: &mut Env<F>,
 ) -> Result<PlonkNode<NodeMeta<F>>, EvalError> {
-
     let result_ast = match expr {
         // -----------------
         // Constants
@@ -272,7 +274,7 @@ fn add_metadata_and_eval_internal<F: Field>(
         // If the input wasn't 0 or 1, it toggles to 0 anyway.
         // We are ignoring integer type checks from old code.
         // This satisfies "use the trait, Field F" approach.
-        // 
+        //
         // If you want strict boolean checks, you'd have to enforce val == 0 or 1.
         PlonkNode::Not(sub, ()) => {
             let sub_w_meta = add_metadata_and_eval_internal(sub, env)?;
@@ -297,7 +299,7 @@ fn add_metadata_and_eval_internal<F: Field>(
         // -----------------
         // If-then-else (cond != 0 => then, else => else)
         // for Field-based booleans.
-        // 
+        //
         PlonkNode::If(cond, then_branch, else_branch, ()) => {
             let cond_w_meta = add_metadata_and_eval_internal::<F>(cond, env)?;
             let then_w_meta = add_metadata_and_eval_internal::<F>(then_branch, env)?;
@@ -325,7 +327,7 @@ fn add_metadata_and_eval_internal<F: Field>(
         // Let binding
         // Inlines the definition into env. We store the field result into env
         // by converting it to an EvalValue. Then evaluate the body, restore env.
-        // 
+        //
         PlonkNode::Let(var_name, def_expr, body_expr, ()) => {
             let def_w_meta = add_metadata_and_eval_internal(def_expr, env)?;
 
@@ -368,7 +370,7 @@ fn add_metadata_and_eval_internal<F: Field>(
         // -----------------
         // Variable reference
         // We look it up in the environment, convert it to F, and use that.
-        // 
+        //
         PlonkNode::Var(var_name, ()) => {
             let definition_val = env
                 .definitions
@@ -395,7 +397,6 @@ fn add_metadata_and_eval_internal<F: Field>(
 }
 
 /// A top-level function that creates an Env and calls `add_metadata_and_eval_internal`.
-#[allow(dead_code)]
 pub fn eval_plonk_node<F: Field>(root: &PlonkNode<()>) -> Result<EvaluatedPlonk<F>, EvalError> {
     let mut env = Env::new();
     let evaluated = add_metadata_and_eval_internal::<F>(root, &mut env)?;
@@ -513,8 +514,18 @@ fn map_plonk_node_value_to_field<F: Field>(
     }
 }
 
+pub fn parse_to_evaluated_plonk<F: Field>(input: &str) -> EvaluatedPlonk<F> {
+    use crate::plonk_circuit::eval_plonk_node;
+
+    let expr = parse_expr(input);
+    let plonk_node = convert_to_plonk(&expr).unwrap();
+    let evaluated_plonk = eval_plonk_node::<F>(&plonk_node)
+        .unwrap_or_else(|e| panic!("Evaluation failed for '{}': {:?}", input, e));
+    return evaluated_plonk;
+}
+
 pub mod evaluated_node_factory {
-    use super::{PlonkNode, NodeMeta, Field};
+    use super::{Field, NodeMeta, PlonkNode};
 
     /// Create an integer constant node with metadata
     pub fn int<F: Field>(value: i64, node_id: usize) -> PlonkNode<NodeMeta<F>> {
@@ -523,7 +534,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: F::from(value as u64),
-            }
+            },
         )
     }
 
@@ -535,7 +546,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: field_value,
-            }
+            },
         )
     }
 
@@ -552,7 +563,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: sum,
-            }
+            },
         )
     }
 
@@ -569,7 +580,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: diff,
-            }
+            },
         )
     }
 
@@ -586,7 +597,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: product,
-            }
+            },
         )
     }
 
@@ -603,7 +614,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: quotient,
-            }
+            },
         )
     }
 
@@ -624,7 +635,7 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: eq_value,
-            }
+            },
         )
     }
 
@@ -643,15 +654,15 @@ pub mod evaluated_node_factory {
             NodeMeta {
                 node_id,
                 evaluated_value: inverted,
-            }
+            },
         )
     }
 
     /// Create a variable reference node with metadata
     pub fn var<F: Field>(
-        name: &str, 
+        name: &str,
         node_id: usize,
-        value: F  // Value should come from environment equivalences
+        value: F, // Value should come from environment equivalences
     ) -> PlonkNode<NodeMeta<F>> {
         PlonkNode::Var(
             name.to_string(),
@@ -681,8 +692,6 @@ pub mod evaluated_node_factory {
         )
     }
 }
-
-use ark_bn254::Fr as F;
 
 fn main() {
     // Create a tiny AST<()> with no metadata:

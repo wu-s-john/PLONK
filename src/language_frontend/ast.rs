@@ -7,6 +7,7 @@ pub enum Expr {
     App(Box<Expr>, Box<Expr>), // Function application
     Let(String, Box<Expr>, Box<Expr>), // Let bindings
     BinOp(BinOp, Box<Expr>, Box<Expr>), // Binary operations
+    If(Box<Expr>, Box<Expr>, Box<Expr>), // If-then-else expressions
 }
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub enum BinOp {
     Mul,
     And,
     Or,
+    Eq,  // Added equality operator
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -54,9 +56,11 @@ impl std::fmt::Display for Expr {
                     BinOp::Mul => "*",
                     BinOp::And => "&&",
                     BinOp::Or => "||",
+                    BinOp::Eq => "==",  // Added equality operator string
                 };
                 write!(f, "({} {} {})", e1, op_str, e2)
             }
+            Expr::If(cond, then, else_expr) => write!(f, "if {} then {} else {}", cond, then, else_expr),
         }
     }
 }

@@ -1,10 +1,8 @@
-use std::collections::{HashMap, HashSet};
-
-use ark_ff::{Field, One, Zero};
-use ark_poly::{GeneralEvaluationDomain, Polynomial};
-
-use crate::plonk_circuit::{EvalValue, NodeMeta, PlonkNode, PlonkNodeId, PlonkNodeKind};
+use crate::plonk_circuit::{parse_to_evaluated_plonk, NodeMeta, PlonkNode, PlonkNodeId, PlonkNodeKind};
+use crate::position_cell::{ColumnType, PositionCell};
 use crate::union_find::UnionFind;
+use ark_ff::Field;
+use std::collections::{HashMap, HashSet};
 
 pub struct ExecutionCell<F> {
     node_id: Option<PlonkNodeId>,
@@ -24,7 +22,7 @@ pub struct PlonkContraints<F> {
 }
 
 impl<F> PlonkContraints<F> {
-    pub fn new(equivalence_pairs: Vec<(PlonkNodeId, PlonkNodeId)>) -> Self {
+    pub fn new(equivalence_pairs: &Vec<(PlonkNodeId, PlonkNodeId)>) -> Self {
         let mut node_node_equivalences = UnionFind::new();
         node_node_equivalences.add_equivalences(&equivalence_pairs);
 
@@ -34,18 +32,6 @@ impl<F> PlonkContraints<F> {
             node_node_equivalences,
         }
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum ColumnType {
-    Input(i32),
-    Output,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct PositionCell {
-    pub row_idx: usize,
-    pub wire_type: ColumnType,
 }
 
 // This type demonstrates if groups of cells are equivalent to each other
@@ -540,7 +526,7 @@ fn interpret_plonk_node_to_execution_trace_table_helper<F: Field>(
 #[allow(dead_code)]
 pub fn interpret_plonk_node_to_execution_trace_table<F: Field>(
     node: &PlonkNode<NodeMeta<F>>,
-    node_node_equivalences: Vec<(PlonkNodeId, PlonkNodeId)>,
+    node_node_equivalences: &Vec<(PlonkNodeId, PlonkNodeId)>,
 ) -> ExecutionTraceTable<F> {
     // Create a new constraints object
     let mut constraints = PlonkContraints::new(node_node_equivalences);
@@ -661,6 +647,7 @@ pub fn build_execution_trace_table<F: Field>(
 
     // Initialize selector polynomials
     let mut selectors: HashMap<PlonkNodeKind, Vec<F>> = HashMap::new();
+    // Initialize selector vectors for each operation type using functional style
     for kind in [
         PlonkNodeKind::Int,
         PlonkNodeKind::Bool,
@@ -674,7 +661,17 @@ pub fn build_execution_trace_table<F: Field>(
     ]
     .iter()
     {
-        selectors.insert(kind.clone(), vec![F::zero(); num_rows]);
+        let selector = (0..num_rows)
+            .map(|row_idx| {
+                if plonk_constraints.gate_operations[row_idx].operation == *kind {
+                    F::one()
+                } else {
+                    F::zero()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        selectors.insert(kind.clone(), selector);
     }
 
     // Fill in the values from gate operations
@@ -769,15 +766,23 @@ impl<F: Field + std::fmt::Debug> std::fmt::Display for PlonkContraints<F> {
     }
 }
 
+pub fn parse_to_execution_trace<F: Field>(input: &str) -> ExecutionTraceTable<F> {
+    let evaluated_plonk = parse_to_evaluated_plonk(input);
+
+    return interpret_plonk_node_to_execution_trace_table(&evaluated_plonk.root, &evaluated_plonk.node_node_equivalences);
+}
+
+
+
 #[cfg(test)]
 mod tests {
     use crate::ast_to_plonk::convert_to_plonk;
     use crate::execution_trace::{
-        build_permutation_map, interpret_plonk_node_to_execution_trace_table_helper, ColumnType,
-        ExecutionCell, ExecutionRow, PlonkContraints, PositionCell,
+        build_permutation_map, interpret_plonk_node_to_execution_trace_table_helper, ColumnType, ExecutionRow, PlonkContraints, PositionCell,
     };
+    use crate::language_frontend::parse_expr;
     use crate::plonk_circuit::evaluated_node_factory::{add, int, let_, mult, var};
-    use crate::plonk_circuit::{evaluated_node_factory, EvaluatedPlonk, PlonkNodeId};
+    use crate::plonk_circuit::{EvaluatedPlonk, PlonkNodeId};
     use std::collections::{HashMap, HashSet};
 
     use ark_bn254::Fr as F;
@@ -804,28 +809,14 @@ mod tests {
     }
 
     fn run_permutation_bijection_test(input: &str) {
-        use crate::language_frontend::{lexer::lex, parser};
         use crate::plonk_circuit::eval_plonk_node;
-
-        fn parse_expr(input: &str) -> Box<crate::language_frontend::ast::Expr> {
-            let tokens = lex(input);
-            let token_triples: Vec<_> = tokens
-                .into_iter()
-                .enumerate()
-                .map(|(i, t)| (i, t, i + 1))
-                .collect();
-
-            parser::ExprParser::new()
-                .parse(token_triples.into_iter())
-                .unwrap()
-        }
-
+        
         let expr = parse_expr(input);
         let plonk_node = convert_to_plonk(&expr).unwrap();
         let evaluated_plonk = eval_plonk_node::<F>(&plonk_node)
             .unwrap_or_else(|e| panic!("Evaluation failed for '{}': {:?}", input, e));
 
-        let mut constraints = PlonkContraints::new(evaluated_plonk.node_node_equivalences);
+        let mut constraints = PlonkContraints::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper(
             &evaluated_plonk.root,
             &mut constraints,
@@ -935,7 +926,7 @@ mod tests {
         };
 
         let mut plonk_constraints =
-            PlonkContraints::<F>::new(evaluated_plonk.node_node_equivalences);
+            PlonkContraints::<F>::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper::<F>(
             &evaluated_plonk.root,
             &mut plonk_constraints,
@@ -981,7 +972,7 @@ mod tests {
         };
 
         let mut plonk_constraints =
-            PlonkContraints::<F>::new(evaluated_plonk.node_node_equivalences);
+            PlonkContraints::<F>::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper::<F>(
             &evaluated_plonk.root,
             &mut plonk_constraints,
@@ -1032,7 +1023,7 @@ mod tests {
         };
 
         let mut plonk_constraints =
-            PlonkContraints::<F>::new(evaluated_plonk.node_node_equivalences);
+            PlonkContraints::<F>::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper::<F>(
             &evaluated_plonk.root,
             &mut plonk_constraints,
@@ -1109,7 +1100,7 @@ mod tests {
         };
 
         let mut plonk_constraints =
-            PlonkContraints::<F>::new(evaluated_plonk.node_node_equivalences);
+            PlonkContraints::<F>::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper::<F>(
             &evaluated_plonk.root,
             &mut plonk_constraints,
@@ -1165,7 +1156,7 @@ mod tests {
         };
 
         let mut plonk_constraints =
-            PlonkContraints::<F>::new(evaluated_plonk.node_node_equivalences);
+            PlonkContraints::<F>::new(&evaluated_plonk.node_node_equivalences);
         interpret_plonk_node_to_execution_trace_table_helper::<F>(
             &evaluated_plonk.root,
             &mut plonk_constraints,

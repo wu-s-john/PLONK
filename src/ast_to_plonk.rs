@@ -26,7 +26,6 @@ impl InlineEnv {
 }
 
 /// Convert an AST expression to a PlonkNode, inlining function definitions.
-#[allow(dead_code)]
 pub fn convert_to_plonk(expr: &Expr) -> Result<PlonkNode<()>, InlineError> {
     let mut env = InlineEnv::new();
     
@@ -53,7 +52,7 @@ fn inline_function_expr(
     // also using env to inline let-bound lambdas.
     let reduced_expr = beta_reduce_all(expr, env)?;
     let expr_type = type_checker::type_check(&reduced_expr)
-        .map_err(|_| InlineError::PartialApplication("Type check failed".to_string()))?;
+        .map_err(|_| InlineError::PartialApplication(format!("Partial application detected after beta reduction: {:?}", reduced_expr)))?;
     if let Type::Fun(_, _) = expr_type {
         return Err(InlineError::PartialApplication("Expression is a function type".to_string()));
     }
@@ -144,6 +143,18 @@ fn beta_reduce_step(
             }
         }
 
+        // For If, recursively reduce all subexpressions:
+        Expr::If(cond, then_expr, else_expr) => {
+            let (cond_r, cond_changed) = beta_reduce_step(cond, env)?;
+            let (then_r, then_changed) = beta_reduce_step(then_expr, env)?;
+            let (else_r, else_changed) = beta_reduce_step(else_expr, env)?;
+            let changed = cond_changed || then_changed || else_changed;
+            Ok((
+                Expr::If(Box::new(cond_r), Box::new(then_r), Box::new(else_r)),
+                changed,
+            ))
+        }
+
         // The interesting case: (f arg). We check if `f` reduces to a Lam(...).
         Expr::App(f, arg) => {
             // reduce f and arg first
@@ -220,6 +231,13 @@ fn substitute(
             let rhs_sub = substitute(rhs, param, replacement, env)?;
             Ok(Expr::BinOp(op.clone(), Box::new(lhs_sub), Box::new(rhs_sub)))
         }
+
+        Expr::If(cond, then_expr, else_expr) => {
+            let cond_sub = substitute(cond, param, replacement, env)?;
+            let then_sub = substitute(then_expr, param, replacement, env)?;
+            let else_sub = substitute(else_expr, param, replacement, env)?;
+            Ok(Expr::If(Box::new(cond_sub), Box::new(then_sub), Box::new(else_sub)))
+        }
     }
 }
 
@@ -251,6 +269,9 @@ pub fn expr_to_plonk(expr: &Expr, _env: &InlineEnv) -> PlonkNode<()> {
                         (),
                     )
                 }
+                BinOp::Eq => {
+                    PlonkNode::Eq(Box::new(lhs_plonk), Box::new(rhs_plonk), ())
+                }
             }
         }
 
@@ -262,6 +283,18 @@ pub fn expr_to_plonk(expr: &Expr, _env: &InlineEnv) -> PlonkNode<()> {
                 var_name.clone(),
                 Box::new(bound_plonk),
                 Box::new(body_plonk),
+                (),
+            )
+        }
+
+        Expr::If(cond, then_expr, else_expr) => {
+            let cond_plonk = expr_to_plonk(cond, _env);
+            let then_plonk = expr_to_plonk(then_expr, _env);
+            let else_plonk = expr_to_plonk(else_expr, _env);
+            PlonkNode::If(
+                Box::new(cond_plonk),
+                Box::new(then_plonk),
+                Box::new(else_plonk),
                 (),
             )
         }

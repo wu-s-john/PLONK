@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-
 use crate::language_frontend::ast::{Expr, BinOp, Type};
 
 #[derive(Debug)]
@@ -138,11 +137,10 @@ type TypeEnv = HashMap<String, Type>;
 fn infer_expr(expr: &Expr, env: &mut TypeEnv) -> Result<(Substitution, Type), TypeError> {
     match expr {
         Expr::Int(_) => Ok((HashMap::new(), Type::Int)),
-        Expr::Bool(_) => Ok((HashMap::new(), Type::Bool)),
+        Expr::Bool(b) => Ok((HashMap::new(), Type::Bool)),
 
         Expr::Var(name) => {
             if let Some(ty) = env.get(name).cloned() {
-                // No new substitution
                 Ok((HashMap::new(), ty))
             } else {
                 Err(TypeError::UnboundVariable(name.clone()))
@@ -150,71 +148,70 @@ fn infer_expr(expr: &Expr, env: &mut TypeEnv) -> Result<(Substitution, Type), Ty
         }
 
         Expr::Lam(param, body) => {
-            // Introduce a fresh type var for param
             let param_ty = fresh_tvar();
             let old = env.insert(param.clone(), param_ty.clone());
             let (s1, body_ty) = infer_expr(body, env)?;
-            // remove the param from env (restore old)
             if let Some(old_ty) = old {
                 env.insert(param.clone(), old_ty);
             } else {
                 env.remove(param);
             }
-            // apply s1 to param_ty (it might have been unified by uses)
             let param_ty_applied = apply_subst(&param_ty, &s1);
             let fun_ty = Type::Fun(Box::new(param_ty_applied), Box::new(body_ty));
-
             Ok((s1, fun_ty))
         }
 
         Expr::App(func, arg) => {
-            // infer foo
             let (s1, func_ty) = infer_expr(func, env)?;
-            // apply s1 to env before inferring argument
             apply_subst_env(env, &s1);
-
-            // infer arg (in updated env)
             let (s2, arg_ty) = infer_expr(arg, env)?;
-            // compose s2 with s1
             let s12 = compose_subst(&s2, &s1);
-
-            // fresh type var for the result
             let result_ty = fresh_tvar();
-            // unify func_ty with (arg_ty -> result_ty), applying s12 to them first
-
             let func_ty_sub = apply_subst(&func_ty, &s2);
             let want_ty = Type::Fun(Box::new(arg_ty.clone()), Box::new(result_ty.clone()));
-
             let s3 = unify(&func_ty_sub, &want_ty)?;
-            // final substitution is s3 ∘ s2 ∘ s1
             let s_final = compose_subst(&s3, &s12);
-
             let result_ty_final = apply_subst(&result_ty, &s_final);
             Ok((s_final, result_ty_final))
         }
 
         Expr::Let(name, e1, body) => {
-            // infer e1
             let (s1, ty_e1) = infer_expr(e1, env)?;
-            // apply s1 to env
             apply_subst_env(env, &s1);
-
-            // put name -> ty_e1 in env
             let old = env.insert(name.clone(), ty_e1);
-            // infer body
             let (s2, body_ty) = infer_expr(body, env)?;
-            // remove binding or restore old
             if let Some(old_ty) = old {
                 env.insert(name.clone(), old_ty);
             } else {
                 env.remove(name);
             }
-
-            // compose s2 with s1
             let s_final = compose_subst(&s2, &s1);
             let body_ty_final = apply_subst(&body_ty, &s_final);
-
             Ok((s_final, body_ty_final))
+        }
+
+        Expr::If(cond, then_expr, else_expr) => {
+            // Type check the condition
+            let (s1, cond_ty) = infer_expr(cond, env)?;
+            apply_subst_env(env, &s1);
+            
+            // Condition must be boolean
+            let s2 = unify(&cond_ty, &Type::Bool)?;
+            apply_subst_env(env, &s2);
+            
+            // Type check both branches
+            let (s3, then_ty) = infer_expr(then_expr, env)?;
+            apply_subst_env(env, &s3);
+            let (s4, else_ty) = infer_expr(else_expr, env)?;
+            
+            // Both branches must have the same type
+            let s5 = unify(&apply_subst(&then_ty, &s4), &else_ty)?;
+            
+            // Compose all substitutions
+            let s_final = compose_subst(&s5, &compose_subst(&s4, &compose_subst(&s3, &compose_subst(&s2, &s1))));
+            let result_ty = apply_subst(&then_ty, &s_final);
+            
+            Ok((s_final, result_ty))
         }
 
         Expr::BinOp(op, e1, e2) => {
@@ -225,21 +222,25 @@ fn infer_expr(expr: &Expr, env: &mut TypeEnv) -> Result<(Substitution, Type), Ty
 
             match op {
                 BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                    // unify t1 with Int and unify t2 with Int
                     let s3 = unify(&apply_subst(&t1, &s12), &Type::Int)?;
                     let s4 = unify(&apply_subst(&t2, &s3), &Type::Int)?;
                     let s_final = compose_subst(&s4, &compose_subst(&s3, &s12));
-                    let ty = Type::Int;
-                    Ok((s_final, ty))
+                    Ok((s_final, Type::Int))
                 }
 
                 BinOp::And | BinOp::Or => {
-                    // unify t1 with Bool, unify t2 with Bool
                     let s3 = unify(&apply_subst(&t1, &s12), &Type::Bool)?;
                     let s4 = unify(&apply_subst(&t2, &s3), &Type::Bool)?;
                     let s_final = compose_subst(&s4, &compose_subst(&s3, &s12));
-                    let ty = Type::Bool;
-                    Ok((s_final, ty))
+                    Ok((s_final, Type::Bool))
+                }
+
+                BinOp::Eq => {
+                    // For equality, both operands must have the same type
+                    // The result is always Bool
+                    let s3 = unify(&apply_subst(&t1, &s12), &apply_subst(&t2, &s12))?;
+                    let s_final = compose_subst(&s3, &s12);
+                    Ok((s_final, Type::Bool))
                 }
             }
         }

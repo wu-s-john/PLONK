@@ -48,6 +48,14 @@ fn eval_with_env(expr: &Expr, env: &mut Environment) -> EvalResult {
             env.remove(name);
             result
         }
+
+        Expr::If(cond, then_expr, else_expr) => {
+            match eval_with_env(cond, env)? {
+                Value::Bool(true) => eval_with_env(then_expr, env),
+                Value::Bool(false) => eval_with_env(else_expr, env),
+                _ => Err(EvalError::TypeError("Condition must be a boolean")),
+            }
+        }
         
         Expr::BinOp(op, e1, e2) => {
             let v1 = eval_with_env(e1, env)?;
@@ -59,6 +67,8 @@ fn eval_with_env(expr: &Expr, env: &mut Environment) -> EvalResult {
                 (BinOp::Mul, Value::Int(i), Value::Int(j)) => Ok(Value::Int(i * j)),
                 (BinOp::And, Value::Bool(b1), Value::Bool(b2)) => Ok(Value::Bool(b1 && b2)),
                 (BinOp::Or, Value::Bool(b1), Value::Bool(b2)) => Ok(Value::Bool(b1 || b2)),
+                (BinOp::Eq, Value::Int(i), Value::Int(j)) => Ok(Value::Bool(i == j)),
+                (BinOp::Eq, Value::Bool(b1), Value::Bool(b2)) => Ok(Value::Bool(b1 == b2)),
                 _ => Err(EvalError::TypeError("Type mismatch in binary operation")),
             }
         }

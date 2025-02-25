@@ -2,6 +2,7 @@ pub mod ast;
 pub mod lexer;
 pub mod type_checker;
 pub mod evaluator;
+pub mod test_utils;
 
 use lalrpop_util::lalrpop_mod;
 
@@ -13,6 +14,7 @@ lalrpop_mod!(pub parser, "/language_frontend/parser.rs");
 pub use ast::{Expr, Type, Value};
 pub use evaluator::eval;
 pub use type_checker::type_check;
+pub use test_utils::parse_expr;
 
 #[cfg(test)]
 mod tests {
@@ -139,6 +141,44 @@ mod tests {
         assert!(result.is_err());
         
         let input = "let f = fun x -> x + 1 in f true";
+        let result = parse_and_eval(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_equality() {
+        // Test equality between integers
+        let input = "let x = 5 == 5 in let y = 3 == 4 in x";
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        // Test equality between booleans
+        let input = "let x = true == true in let y = false == true in x";
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        // Test equality with expressions
+        let input = "(1 + 2) == (4 - 1)";
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        // Test equality with boolean expressions
+        let input = "(true && false) == false";
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        // Test equality precedence
+        let input = "1 + 2 == 3";  // Should parse as (1 + 2) == 3
+        let result = parse_and_eval(input).unwrap();
+        assert!(matches!(result, Value::Bool(true)));
+
+        // Test type error with mixed types
+        let input = "5 == true";
+        let result = parse_and_eval(input);
+        assert!(result.is_err());
+
+        // Test type error with functions
+        let input = "let f = fun x -> x in f == f";
         let result = parse_and_eval(input);
         assert!(result.is_err());
     }

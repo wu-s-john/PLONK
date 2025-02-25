@@ -12,6 +12,9 @@ extern {
         "let" => Token::Let,
         "in" => Token::In,
         "fun" => Token::Fun,
+        "if" => Token::If,
+        "then" => Token::Then,
+        "else" => Token::Else,
         "->" => Token::Arrow,
         "+" => Token::Plus,
         "-" => Token::Minus,
@@ -19,6 +22,7 @@ extern {
         "&&" => Token::And,
         "||" => Token::Or,
         "=" => Token::Equals,
+        "==" => Token::Eq,
         "(" => Token::LParen,
         ")" => Token::RParen,
         "true" => Token::True,
@@ -31,7 +35,8 @@ extern {
 pub Expr: Box<Expr> = {
     Let => Box::new(<>),
     Lambda => Box::new(<>),
-    BinOp,
+    IfExpr => Box::new(<>),
+    EqExpr,
 };
 
 Let: Expr = {
@@ -42,6 +47,16 @@ Let: Expr = {
 Lambda: Expr = {
     "fun" <param:Id> "->" <body:Expr> =>
         Expr::Lam(param, body),
+};
+
+IfExpr: Expr = {
+    "if" <cond:Expr> "then" <then_expr:Expr> "else" <else_expr:Expr> =>
+        Expr::If(cond, then_expr, else_expr),
+};
+
+EqExpr: Box<Expr> = {
+    <l:EqExpr> "==" <r:BinOp> => Box::new(Expr::BinOp(BinOp::Eq, l, r)),
+    BinOp,
 };
 
 BinOp: Box<Expr> = {
