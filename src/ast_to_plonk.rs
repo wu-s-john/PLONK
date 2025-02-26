@@ -257,8 +257,8 @@ pub fn expr_to_plonk(expr: &Expr, _env: &InlineEnv) -> PlonkNode<()> {
                 BinOp::Sub => PlonkNode::Sub(Box::new(lhs_plonk), Box::new(rhs_plonk), ()),
                 BinOp::Mul => PlonkNode::Mult(Box::new(lhs_plonk), Box::new(rhs_plonk), ()),
                 BinOp::And => {
-                    // Treat "a && b" as "a == b" for demonstration
-                    PlonkNode::Eq(Box::new(lhs_plonk), Box::new(rhs_plonk), ())
+                    // Implement "a && b" as multiplication for boolean values
+                    PlonkNode::Mult(Box::new(lhs_plonk), Box::new(rhs_plonk), ())
                 }
                 BinOp::Or => {
                     // a || b ≈ !( (!a) == (!b) )

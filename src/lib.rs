@@ -10,6 +10,11 @@ pub mod polynomial_utils;
 pub mod ast_to_plonk;
 pub mod position_cell;
 
+// New modules for polynomial operations
+pub mod execution_trace_polynomial;
+pub mod polynomial_constraints_direct;
+pub mod polynomial_constraints_fft;
+
 // Language frontend module
 pub mod language_frontend;
 

@@ -772,7 +772,72 @@ pub fn parse_to_execution_trace<F: Field>(input: &str) -> ExecutionTraceTable<F>
     return interpret_plonk_node_to_execution_trace_table(&evaluated_plonk.root, &evaluated_plonk.node_node_equivalences);
 }
 
-
+// This function expands the execution trace table to the given domain size which is typically the next power of 2 of the number of rows in the execution trace table
+// It fills all the gates with the value of 0.
+// Additionally, all the permutation values are set to the some position
+pub fn expand_execution_trace_table<F: Field>(execution_trace_table: &ExecutionTraceTable<F>, domain_size: usize) -> ExecutionTraceTable<F> {
+    let current_size = execution_trace_table.input1.len();
+    
+    // If the current size is already equal to or greater than the domain size, return the original table
+    if current_size >= domain_size {
+        return execution_trace_table.clone();
+    }
+    
+    // Create zero value for padding
+    let zero = F::zero();
+    
+    // Create expanded vectors with original values and padded with zeros
+    let mut input1 = execution_trace_table.input1.clone();
+    let mut input2 = execution_trace_table.input2.clone();
+    let mut input3 = execution_trace_table.input3.clone();
+    let mut output = execution_trace_table.output.clone();
+    let mut permutation_input1 = execution_trace_table.permutation_input1.clone();
+    let mut permutation_input2 = execution_trace_table.permutation_input2.clone();
+    let mut permutation_input3 = execution_trace_table.permutation_input3.clone();
+    let mut permutation_output = execution_trace_table.permutation_output.clone();
+    
+    // Pad vectors with zeros to reach domain_size
+    input1.resize(domain_size, zero);
+    input2.resize(domain_size, zero);
+    input3.resize(domain_size, zero);
+    output.resize(domain_size, zero);
+    
+    // For permutation values, we need to set them to identity positions
+    // For each expanded cell, map it to its own identity position
+    for i in current_size..domain_size {
+        // Create identity positions for each column type
+        let input1_pos = PositionCell { row_idx: i, wire_type: ColumnType::Input(0) };
+        let input2_pos = PositionCell { row_idx: i, wire_type: ColumnType::Input(1) };
+        let input3_pos = PositionCell { row_idx: i, wire_type: ColumnType::Input(2) };
+        let output_pos = PositionCell { row_idx: i, wire_type: ColumnType::Output };
+        
+        // Convert positions to field elements
+        permutation_input1.push(F::from(position_to_id(&input1_pos) as u64));
+        permutation_input2.push(F::from(position_to_id(&input2_pos) as u64));
+        permutation_input3.push(F::from(position_to_id(&input3_pos) as u64));
+        permutation_output.push(F::from(position_to_id(&output_pos) as u64));
+    }
+    
+    // Clone and expand selectors
+    let mut selectors = HashMap::new();
+    for (op, selector_vec) in &execution_trace_table.selectors {
+        let mut expanded_selector = selector_vec.clone();
+        expanded_selector.resize(domain_size, zero);
+        selectors.insert(op.clone(), expanded_selector);
+    }
+    
+    ExecutionTraceTable {
+        input1,
+        input2,
+        input3,
+        output,
+        permutation_input1,
+        permutation_input2,
+        permutation_input3,
+        permutation_output,
+        selectors,
+    }
+}
 
 #[cfg(test)]
 mod tests {
