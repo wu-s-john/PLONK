@@ -1,0 +1,3 @@
+[submodule "nemesis"]
+	path = nemesis
+	url = git@github.com:wu-s-john/nemesis.git

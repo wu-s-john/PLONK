@@ -1,6 +1,6 @@
 use crate::execution_trace_polynomial::ExecutionTrace;
 use ark_ff::{FftField, Field};
-use ark_poly::{univariate::DensePolynomial, EvaluationDomain, UVPolynomial};
+use ark_poly::{univariate::DensePolynomial, EvaluationDomain, DenseUVPolynomial};
 
 /// Builds the permutation constraint polynomial for PLONK's permutation argument using FFT operations.
 ///

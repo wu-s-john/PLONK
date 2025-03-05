@@ -5,7 +5,7 @@ use crate::{
 };
 use ark_ff::{FftField, Field};
 use ark_poly::{
-    univariate::DensePolynomial, EvaluationDomain, Radix2EvaluationDomain, UVPolynomial,
+    univariate::DensePolynomial, DenseUVPolynomial, EvaluationDomain, Radix2EvaluationDomain
 };
 use std::collections::HashMap;
 
@@ -29,7 +29,7 @@ pub struct ExecutionTrace<F: Field, P> {
     pub selectors: HashMap<PlonkNodeKind, P>,
 }
 
-pub fn build_execution_trace_polynomial<F: FftField, P: UVPolynomial<F>, D: EvaluationDomain<F>>(
+pub fn build_execution_trace_polynomial<F: FftField, P: DenseUVPolynomial<F>, D: EvaluationDomain<F>>(
     execution_trace: &ExecutionTraceTable<F>,
     grand_product: Vec<F>,
     grand_product_random1: F,
@@ -106,7 +106,7 @@ pub fn build_execution_trace_polynomial<F: FftField, P: UVPolynomial<F>, D: Eval
     }
 }
 
-pub fn build_execution_trace_extended_evaluation_form<F: FftField, P: UVPolynomial<F>>(
+pub fn build_execution_trace_extended_evaluation_form<F: FftField, P: DenseUVPolynomial<F>>(
     execution_trace: &ExecutionTrace<F, P>,
     coset_domain: &Radix2EvaluationDomain<F>,
     evaluation_domain: &Radix2EvaluationDomain<F>,

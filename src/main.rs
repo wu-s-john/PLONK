@@ -15,6 +15,8 @@ mod execution_trace_polynomial;
 mod polynomial_constraints_direct;
 mod polynomial_constraints_fft;
 
+pub mod kzg;
+
 pub use polynomial_builder::build_gate_constraint_polynomial;
 pub use polynomial_builder::build_permutation_constraint_polynomial;
 pub use plonk_circuit::eval_plonk_node;

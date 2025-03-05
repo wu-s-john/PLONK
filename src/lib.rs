@@ -18,5 +18,8 @@ pub mod polynomial_constraints_fft;
 // Language frontend module
 pub mod language_frontend;
 
+// KZG module
+pub mod kzg;
+
 // Re-export commonly used types
 pub use union_find::UnionFind;

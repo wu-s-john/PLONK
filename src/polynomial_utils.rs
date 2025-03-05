@@ -3,7 +3,7 @@ use ark_poly::{
     univariate::DensePolynomial,
     EvaluationDomain,
     GeneralEvaluationDomain,
-    UVPolynomial,
+    DenseUVPolynomial,
 };
 
 /// Converts a slice of evaluations (in a given domain) to a DensePolynomial
